@@ -5,10 +5,8 @@ import { ClientTerminal } from './components/ClientTerminal';
 import { SplashScreen } from './components/SplashScreen';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastProvider } from './components/common/Toast';
-import { useTheme } from './hooks/useTheme';
 
 export const App: React.FC = () => {
-  useTheme();
   const [role, setRole] = useState<'host' | 'client' | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [showSplash, setShowSplash] = useState(true);

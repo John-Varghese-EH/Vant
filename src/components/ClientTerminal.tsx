@@ -11,10 +11,10 @@ import { CodeBlock } from './common/CodeBlock';
 import { PairingPanel } from './PairingPanel';
 import { IntegrationsPanel } from './IntegrationsPanel';
 import { ResourceMonitor } from './ResourceMonitor';
-import { AgentShortcutsPanel } from './AgentShortcutsPanel';
 import { connectToHost } from '../lib/tauri';
 import { Logo } from './common/Logo';
 import { ThemeToggle } from './common/ThemeToggle';
+import { AccentSelector } from './common/AccentSelector';
 import { CustomSelect } from './common/CustomSelect';
 import { useApiProxy } from '../hooks/useApiProxy';
 import { useToast } from './common/Toast';
@@ -115,7 +115,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
   const [remoteModels, setRemoteModels] = useState<string[]>([]);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'chat' | 'agents' | 'pairing' | 'integrations' | 'telemetry'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'integrations' | 'pairing' | 'telemetry'>('chat');
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [copiedProxy, setCopiedProxy] = useState(false);
   const [showStudio, setShowStudio] = useState(false);
@@ -365,12 +365,12 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
               <span className="hidden lg:inline">Chat</span>
             </button>
             <button
-              onClick={() => setActiveTab('agents')}
-              className={`segmented-item ${activeTab === 'agents' ? 'active' : ''}`}
-              title="Autonomous Agents & Quick Tool Presets"
+              onClick={() => setActiveTab('integrations')}
+              className={`segmented-item ${activeTab === 'integrations' ? 'active' : ''}`}
+              title="Coding Agents, Editors & Tool Integrations"
             >
               <Icon name="smart_toy" size={13} />
-              <span className="hidden lg:inline">Agents</span>
+              <span className="hidden lg:inline">Integrations</span>
             </button>
             <button
               onClick={() => setActiveTab('pairing')}
@@ -379,14 +379,6 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
             >
               <Icon name="sensors" size={13} className={isConnecting ? 'breathe-pulse text-accent' : ''} />
               <span className="hidden lg:inline">Pairing</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('integrations')}
-              className={`segmented-item ${activeTab === 'integrations' ? 'active' : ''}`}
-              title="Tool Integrations & Quick Start configs"
-            >
-              <Icon name="widgets" size={13} />
-              <span className="hidden lg:inline">Integrations</span>
             </button>
             <button
               onClick={() => setActiveTab('telemetry')}
@@ -451,6 +443,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
             )}
           </div>
 
+          <AccentSelector size="sm" />
           <ThemeToggle size="sm" />
 
           {isConnected ? (
@@ -495,25 +488,37 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
             {/* Messages Scroll Area */}
             <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--gc-space-xl)' }} className="flex flex-col gap-md">
               {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center text-center" style={{ flex: 1, minHeight: '340px' }}>
-                  <div 
-                    className="flex items-center justify-center text-accent"
-                    style={{ 
-                      width: '56px', 
-                      height: '56px', 
-                      borderRadius: '50%', 
-                      background: 'var(--gc-accent-muted)',
-                      border: '1px solid var(--gc-border)',
-                      marginBottom: 'var(--gc-space-md)'
-                    }}
-                  >
-                    <Icon name="auto_awesome" size={26} />
+                <div className="flex flex-col items-center justify-center text-center my-auto py-8" style={{ flex: 1, minHeight: '360px' }}>
+                  {/* Hero Icon with Dual Concentric Halo */}
+                  <div className="relative mb-5">
+                    <div className="absolute inset-0 rounded-2xl bg-violet-600/20 blur-xl scale-125 pointer-events-none" />
+                    <div 
+                      className="relative flex items-center justify-center text-accent"
+                      style={{ 
+                        width: '64px', 
+                        height: '64px', 
+                        borderRadius: '20px', 
+                        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%)',
+                        border: '1px solid var(--gc-border-light)',
+                        boxShadow: 'var(--gc-shadow-md), inset 0 1px 1px rgba(255, 255, 255, 0.2)'
+                      }}
+                    >
+                      <Icon name="auto_awesome" size={28} className="text-accent" />
+                    </div>
                   </div>
-                  <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '6px' }}>Remote Compute Terminal</h3>
-                  <p className="text-muted" style={{ fontSize: '13px', maxWidth: '460px', lineHeight: 1.5, marginBottom: 'var(--gc-space-lg)' }}>
+
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] text-[11px] font-semibold tracking-wider uppercase text-[var(--gc-text-muted)] mb-3">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                    <span>Private Mesh Compute</span>
+                  </div>
+
+                  <h3 className="text-2xl font-bold tracking-tight text-[var(--gc-text)] mb-2">
+                    Vant Studio
+                  </h3>
+                  <p className="text-[var(--gc-text-muted)] text-[13.5px] max-w-lg mx-auto leading-relaxed mb-6">
                     {isConnected 
-                      ? `Connected to host node via encrypted Noise tunnel. Model: ${selectedModel || 'Default'}. Select a prompt starter below or enter a prompt.`
-                      : 'Not connected to a host node. Pair with your host GPU laptop over local Wi-Fi or Cloudflare Quick Tunnel to access remote inference.'}
+                      ? `Securely routed to your workstation GPU over Noise-XX tunnel. Bound to model ${selectedModel || 'Default'}. Select a preset or type below.`
+                      : 'Not connected to a host node. Pair with your workstation PC over local Wi-Fi or Cloudflare Tunnel to access remote GPU compute.'}
                   </p>
 
                   {!isConnected ? (
@@ -521,21 +526,22 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                       {discoveredPeers.length > 0 && (
                         <div className="w-full flex flex-col gap-xs text-left">
                           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted px-1">
-                            Nearby Hosts on LAN
+                            Discovered Workstations on LAN
                           </div>
                           {discoveredPeers.map((peer) => (
                             <div
                               key={peer.peer_id}
-                              className="flex items-center justify-between gap-sm px-3.5 py-2.5 rounded-xl border transition-colors"
+                              className="flex items-center justify-between gap-sm px-4 py-3 rounded-2xl border transition-all hover:border-violet-500/40"
                               style={{
-                                background: 'var(--gc-surface-elevated)',
+                                background: 'var(--gc-surface)',
                                 borderColor: 'var(--gc-border)',
+                                boxShadow: 'var(--gc-shadow-sm)',
                               }}
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <StatusDot status="idle" />
+                              <div className="flex items-center gap-3 min-w-0">
+                                <StatusDot status="active" />
                                 <div className="min-w-0">
-                                  <div className="text-[13px] font-medium truncate text-[var(--gc-text)]">
+                                  <div className="text-[13.5px] font-semibold truncate text-[var(--gc-text)]">
                                     {peer.device_name}
                                   </div>
                                   <div className="text-[11px] font-mono text-muted truncate">
@@ -545,6 +551,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                               </div>
                               <Button
                                 size="sm"
+                                variant="primary"
                                 onClick={async () => {
                                   try {
                                     await connectToHost(peer.peer_id);
@@ -561,42 +568,33 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                           ))}
                         </div>
                       )}
-                      <Button onClick={() => setActiveTab('pairing')} className="flex items-center gap-xs">
-                        <Icon name="sensors" size={14} />
-                        <span>{discoveredPeers.length > 0 ? 'Open Pairing & Tunnel Manager' : 'Connect to Host Laptop'}</span>
+                      <Button onClick={() => setActiveTab('pairing')} size="md" variant="primary" className="flex items-center gap-2">
+                        <Icon name="sensors" size={16} />
+                        <span>{discoveredPeers.length > 0 ? 'Open Pairing & Remote Tunnel' : 'Pair with Host Workstation'}</span>
                       </Button>
                     </div>
                   ) : (
                     /* Bento Prompt Starters Grid */
-                    <div 
-                      className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-[760px] mt-4"
-                    >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 w-full max-w-[800px] mt-2">
                       {PROMPT_STARTERS.map((starter, idx) => (
                         <div
                           key={idx}
-                          className="starter-card group"
+                          className="starter-card group text-left p-4 rounded-2xl border border-[var(--gc-border)] bg-[var(--gc-surface)] hover:border-violet-500/35 hover:shadow-lg transition-all cursor-pointer relative overflow-hidden"
                           onClick={() => handleStarterClick(starter)}
                         >
-                          <div className="flex items-center justify-between">
-                            <span 
-                              className="badge badge-neutral squircle-badge" 
-                              style={{ 
-                                fontSize: '10px', 
-                                padding: '2px 8px',
-                                borderRadius: 'var(--gc-squircle-badge)'
-                              }}
-                            >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="badge badge-neutral text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full">
                               {starter.category}
                             </span>
-                            <div className="p-1.5 rounded-lg bg-[var(--gc-surface-sunken)] group-hover:bg-[var(--gc-accent-muted)] transition-colors">
+                            <div className="w-7 h-7 rounded-full bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] flex items-center justify-center group-hover:scale-110 group-hover:bg-violet-500/15 group-hover:border-violet-500/30 transition-all">
                               {starter.icon}
                             </div>
                           </div>
-                          <div className="text-[13.5px] font-semibold text-[var(--gc-text)] mt-1 tracking-tight flex items-center justify-between">
+                          <div className="text-[14px] font-bold text-[var(--gc-text)] group-hover:text-accent transition-colors tracking-tight flex items-center justify-between">
                             <span>{starter.title}</span>
-                            <Icon name="chevron_right" size={14} className="text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <Icon name="north_east" size={14} className="text-muted opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" />
                           </div>
-                          <p className="text-muted text-[12px] leading-relaxed m-0">
+                          <p className="text-muted text-[12px] leading-relaxed mt-1 m-0">
                             {starter.description}
                           </p>
                         </div>
@@ -757,106 +755,102 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Floating Unified Composer (Theme Aware & Squircle Geometry) */}
-            <div className="p-3 sm:p-4 shrink-0 bg-transparent">
+            {/* Floating Unified Composer (Apple Double-Bezel Enclosure & Liquid Glass) */}
+            <div className="p-3 sm:p-5 shrink-0 bg-transparent">
               <div 
-                className="flex flex-col squircle-lg transition-all"
+                className="double-bezel transition-all max-w-[840px] mx-auto shadow-2xl"
                 style={{ 
-                  maxWidth: '820px', 
-                  margin: '0 auto',
-                  padding: '10px 14px 10px',
-                  borderRadius: 'var(--gc-radius-lg)',
-                  background: 'var(--gc-surface)',
-                  backdropFilter: 'var(--gc-glass)',
-                  WebkitBackdropFilter: 'var(--gc-glass)',
-                  border: '1px solid var(--gc-border)',
-                  boxShadow: 'var(--gc-shadow-md)'
+                  borderRadius: '24px',
+                  background: 'rgba(255, 255, 255, 0.035)',
+                  boxShadow: '0 16px 40px -10px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08)'
                 }}
               >
-                <textarea 
-                  ref={textareaRef}
-                  value={inputVal}
-                  onChange={(e) => setInputVal(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={isConnected ? `Send a prompt to ${selectedModel || 'remote compute node'}...` : "Connect to host node to chat..."}
-                  disabled={!isConnected}
-                  style={{ 
-                    width: '100%',
-                    background: 'transparent',
-                    border: 'none',
-                    outline: 'none',
-                    color: 'var(--gc-text)',
-                    fontFamily: 'var(--gc-font-ui)',
-                    fontSize: '13.5px',
-                    lineHeight: 1.55,
-                    resize: 'none', 
-                    minHeight: '38px',
-                    maxHeight: '140px',
-                    overflowY: 'auto'
-                  }}
-                  rows={inputVal.split('\n').length > 1 ? Math.min(inputVal.split('\n').length, 6) : 1}
-                />
-
                 <div 
-                  className="flex justify-between items-center pt-2 mt-1 border-t"
-                  style={{ borderColor: 'var(--gc-border)' }}
+                  className="double-bezel-inner flex flex-col transition-all"
+                  style={{
+                    borderRadius: '19px',
+                    padding: '12px 16px 10px',
+                    background: 'var(--gc-surface)',
+                    backdropFilter: 'blur(30px) saturate(180%)',
+                    WebkitBackdropFilter: 'blur(30px) saturate(180%)',
+                    boxShadow: 'inset 0 1px 1px rgba(255, 255, 255, 0.12)'
+                  }}
                 >
-                  <div className="flex items-center gap-2">
-                    {selectedPersona.id !== 'general' && (
-                      <span 
-                        className="badge badge-info squircle-badge" 
-                        style={{ 
-                          fontSize: '9.5px', 
-                          padding: '2px 7px',
-                          borderRadius: 'var(--gc-squircle-badge)'
-                        }}
+                  <textarea 
+                    ref={textareaRef}
+                    value={inputVal}
+                    onChange={(e) => setInputVal(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={isConnected ? `Prompt ${selectedModel || 'remote GPU compute node'}...` : "Connect to host node to chat..."}
+                    disabled={!isConnected}
+                    style={{ 
+                      width: '100%',
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      color: 'var(--gc-text)',
+                      fontFamily: 'var(--gc-font-ui)',
+                      fontSize: '14px',
+                      lineHeight: 1.6,
+                      resize: 'none', 
+                      minHeight: '40px',
+                      maxHeight: '150px',
+                      overflowY: 'auto'
+                    }}
+                    rows={inputVal.split('\n').length > 1 ? Math.min(inputVal.split('\n').length, 6) : 1}
+                  />
+
+                  <div 
+                    className="flex justify-between items-center pt-2 mt-1 border-t"
+                    style={{ borderColor: 'var(--gc-border)' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      {selectedPersona.id !== 'general' && (
+                        <span 
+                          className="badge badge-info flex items-center gap-1" 
+                          style={{ 
+                            fontSize: '10px', 
+                            padding: '2px 8px',
+                            borderRadius: '9999px'
+                          }}
+                        >
+                          <Icon name="auto_awesome" size={10} />
+                          <span>{selectedPersona.name}</span>
+                        </span>
+                      )}
+                      <span className="text-muted text-[11px] hidden sm:inline">
+                        Return to send (Shift + Return for newline)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {inputVal.trim() && (
+                        <span className="text-[10.5px] text-muted font-mono hidden md:inline">
+                          ~{Math.round(inputVal.length / 4)} tokens
+                        </span>
+                      )}
+
+                      <button 
+                        onClick={copyProxyUrl} 
+                        className="btn btn-ghost text-mono flex items-center gap-1.5 text-muted hover:text-[var(--gc-text)] rounded-full px-2.5 py-1 text-[11px] border border-[var(--gc-border)] bg-[var(--gc-surface-sunken)] transition-colors cursor-pointer"
+                        title={`Copy local proxy endpoint (127.0.0.1:${proxyPort})`}
                       >
-                        {selectedPersona.name}
-                      </span>
-                    )}
-                    <span className="text-muted text-[11px] hidden sm:inline">
-                      Return to send • Shift + Return for newline
-                    </span>
-                  </div>
+                        <Icon name="public" size={12} className="text-accent" />
+                        <span>:{proxyPort}</span>
+                        {copiedProxy && <Icon name="check" size={11} className="text-success" />}
+                      </button>
 
-                  <div className="flex items-center gap-2">
-                    {inputVal.trim() && (
-                      <span className="text-[10.5px] text-muted font-mono hidden md:inline">
-                        ~{Math.round(inputVal.length / 4)} tokens
-                      </span>
-                    )}
-
-                    <button 
-                      onClick={copyProxyUrl} 
-                      className="btn btn-ghost squircle-sm text-mono flex items-center gap-1 text-muted hover:text-[var(--gc-text)]"
-                      style={{ 
-                        fontSize: '11px', 
-                        padding: '3px 8px', 
-                        borderRadius: 'var(--gc-squircle-sm)',
-                        border: '1px solid var(--gc-border)',
-                        background: 'var(--gc-surface-sunken)'
-                      }}
-                      title={`Click to copy local OpenAI proxy endpoint (127.0.0.1:${proxyPort})`}
-                    >
-                      <Icon name="public" size={11} />
-                      <span>:{proxyPort}</span>
-                      {copiedProxy && <Icon name="check" size={11} className="text-success" />}
-                    </button>
-
-                    <Button 
-                      onClick={handleSend} 
-                      disabled={!inputVal.trim() || !isConnected || isStreaming}
-                      size="sm"
-                      className="squircle-sm"
-                      style={{ 
-                        borderRadius: 'var(--gc-squircle-sm)',
-                        padding: '5px 14px',
-                        fontSize: '12.5px'
-                      }}
-                    >
-                      <Icon name="send" size={13} />
-                      <span>{isStreaming ? 'Streaming...' : 'Send'}</span>
-                    </Button>
+                      <Button 
+                        onClick={handleSend} 
+                        disabled={!inputVal.trim() || !isConnected || isStreaming}
+                        size="sm"
+                        variant="primary"
+                        className="rounded-full px-4 py-1.5 font-bold"
+                      >
+                        <Icon name="send" size={13} />
+                        <span>{isStreaming ? 'Streaming...' : 'Send'}</span>
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1022,9 +1016,11 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
           )}
 
         </div>
-      ) : activeTab === 'agents' ? (
+      ) : activeTab === 'integrations' ? (
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--gc-space-xl)' }}>
-          <AgentShortcutsPanel
+          <IntegrationsPanel
+            selectedModel={selectedModel}
+            remoteModels={remoteModels}
             isConnected={isConnected}
             onNavigatePairing={() => setActiveTab('pairing')}
           />
@@ -1034,10 +1030,6 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
           <div style={{ width: '100%', maxWidth: '560px' }}>
             <PairingPanel mode="client" />
           </div>
-        </div>
-      ) : activeTab === 'integrations' ? (
-        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--gc-space-xl)' }}>
-          <IntegrationsPanel />
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--gc-space-xl)', display: 'flex', justifyContent: 'center' }}>

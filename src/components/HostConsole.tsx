@@ -32,7 +32,9 @@ import { AppStoreCatalog } from './AppStoreCatalog';
 import { UserManagementPanel } from './UserManagementPanel';
 import { ResourceMonitor } from './ResourceMonitor';
 import { ThemeToggle } from './common/ThemeToggle';
+import { AccentSelector } from './common/AccentSelector';
 import { CustomSelect } from './common/CustomSelect';
+import { useTheme } from '../hooks/useTheme';
 
 interface HostConsoleProps {
   onResetRole: () => void;
@@ -45,6 +47,7 @@ export const HostConsole: React.FC<HostConsoleProps> = ({ onResetRole }) => {
   const { isHosting, sessions, hostingError, startHosting, stopHosting, killSession } = useHosting();
   const { status: ollamaStatus, models, pullModel, swapModel, startEngine, isStarting, ollamaError, pullProgress, isPulling } = useOllama();
   const { settings, save } = useSettings();
+  const { activePreset, setAccent, resetAccent, presets } = useTheme();
   
   // Local form state for Settings to prevent keystroke save jitter
   const [formSettings, setFormSettings] = useState<AppSettings | null>(null);
@@ -509,6 +512,7 @@ export const HostConsole: React.FC<HostConsoleProps> = ({ onResetRole }) => {
               >
                 <Icon name="dock_to_right" size={17} />
               </button>
+              <AccentSelector size="sm" />
               <ThemeToggle size="sm" />
               <Button
                 variant={isHosting ? 'danger' : 'primary'}
@@ -568,7 +572,10 @@ export const HostConsole: React.FC<HostConsoleProps> = ({ onResetRole }) => {
               </Button>
 
               <div className="flex items-center justify-between pt-1">
-                <ThemeToggle size="sm" />
+                <div className="flex items-center gap-1.5">
+                  <AccentSelector size="sm" />
+                  <ThemeToggle size="sm" />
+                </div>
                 <button
                   type="button"
                   onClick={onResetRole}
@@ -1891,6 +1898,113 @@ export const HostConsole: React.FC<HostConsoleProps> = ({ onResetRole }) => {
                       </button>
                     </div>
                     <span className="text-muted text-[11px] mt-0.5">Ultra-low-latency LPU cloud inference endpoint</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. Appearance, Window Accent & Frame */}
+              <div className="card glass-panel flex flex-col gap-md" style={{ padding: '22px' }}>
+                <div className="flex flex-wrap justify-between items-center gap-3 pb-3 border-b border-[var(--gc-border)]">
+                  <div className="flex items-center gap-sm">
+                    <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-accent shrink-0">
+                      <Icon name="palette" size={16} />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: '15px', fontWeight: 600 }}>Appearance, Window Accent &amp; Frame</h3>
+                      <p className="text-muted text-[12px]">Windows 11 titlebar color, window border, and UI styling</p>
+                    </div>
+                  </div>
+                  <Badge variant="info" className="shrink-0 flex items-center gap-1">
+                    <Icon name="verified" size={12} />
+                    <span>Windows 11 DWM Synced</span>
+                  </Badge>
+                </div>
+
+                <div className="flex flex-col gap-md pt-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="text-[13px] font-semibold text-[var(--gc-text)]">
+                        Curated Designer Color Palettes
+                      </span>
+                      <p className="text-muted text-[11.5px] mt-0.5">
+                        Selecting any color immediately themes the app buttons, glowing borders, and the Windows 11 DWM titlebar.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={resetAccent}
+                      className="text-xs text-muted hover:text-[var(--gc-text)] underline cursor-pointer self-start sm:self-auto"
+                    >
+                      Reset Default
+                    </button>
+                  </div>
+
+                  {/* 8 Preset Swatch Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {presets.map((p) => {
+                      const isSelected = activePreset.hex.toLowerCase() === p.hex.toLowerCase();
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setAccent(p.hex)}
+                          className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+                            isSelected
+                              ? 'border-[var(--gc-accent)] bg-[var(--gc-surface-elevated)] shadow-md'
+                              : 'border-[var(--gc-border)] bg-[var(--gc-surface-sunken)] hover:border-[var(--gc-border-light)]'
+                          }`}
+                        >
+                          <div
+                            className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-105"
+                            style={{
+                              backgroundColor: p.hex,
+                              boxShadow: isSelected ? `0 0 12px ${p.hex}88` : 'none',
+                            }}
+                          >
+                            {isSelected && <Icon name="check" size={16} className="text-white drop-shadow" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className={`text-[12px] truncate ${isSelected ? 'font-bold text-[var(--gc-text)]' : 'font-medium text-[var(--gc-text-muted)]'}`}>
+                              {p.name}
+                            </div>
+                            <div className="text-[10px] text-[var(--gc-text-dim)] truncate">
+                              {p.hex}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Hex Picker & Live Preview */}
+                  <div className="p-3.5 rounded-xl bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="color"
+                        value={activePreset.hex}
+                        onChange={(e) => setAccent(e.target.value)}
+                        className="w-9 h-9 rounded-xl border-0 bg-transparent cursor-pointer p-0 shrink-0"
+                        title="Pick custom hex color"
+                      />
+                      <div>
+                        <span className="text-[12px] font-semibold text-[var(--gc-text)] flex items-center gap-1.5">
+                          <span>Active Accent:</span>
+                          <span className="font-mono text-accent">{activePreset.name} ({activePreset.hex})</span>
+                        </span>
+                        <p className="text-[11px] text-[var(--gc-text-muted)]">
+                          {activePreset.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button variant="primary" size="sm" className="pointer-events-none text-xs">
+                        Primary Button
+                      </Button>
+                      <Badge variant="info" className="pointer-events-none text-xs">
+                        Active Badge
+                      </Badge>
+                    </div>
                   </div>
                 </div>
               </div>

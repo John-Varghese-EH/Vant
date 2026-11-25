@@ -70,6 +70,12 @@ async function safeInvoke<T>(cmd: string, args?: any): Promise<T> {
     if (cmd === 'get_discovered_peers' || cmd === 'get_paired_devices') {
       return [] as unknown as T;
     }
+    if (cmd === 'vant_list_integrations') {
+      return [] as unknown as T;
+    }
+    if (cmd === 'vant_list_model_aliases') {
+      return {} as unknown as T;
+    }
     if (cmd === 'get_local_ip') {
       return '127.0.0.1' as unknown as T;
     }
@@ -399,3 +405,30 @@ export const getServiceLogs = (recipe_id: string, tail: number = 100) =>
   safeInvoke<string>('get_service_logs', { recipeId: recipe_id, recipe_id, tail });
 export const checkServiceHealth = (endpoint: string, timeout_secs: number = 3) =>
   safeInvoke<boolean>('check_service_health', { endpoint, timeoutSecs: timeout_secs, timeout_secs });
+
+// Window Accent & Theme
+export const setWindowAccent = (accentHex: string) =>
+  safeInvoke<void>('set_window_accent', { accentHex, accent_hex: accentHex });
+
+// Vant Integrations & Aliases
+export interface IntegrationMetadata {
+  id: string;
+  name: string;
+  description: string;
+  is_installed: boolean;
+}
+
+export const vantListIntegrations = () =>
+  safeInvoke<IntegrationMetadata[]>('vant_list_integrations');
+
+export const vantLaunchIntegration = (id: string, model: string, configOnly: boolean = false) =>
+  safeInvoke<string>('vant_launch_integration', { id, model, configOnly, config_only: configOnly });
+
+export const vantListModelAliases = () =>
+  safeInvoke<Record<string, string>>('vant_list_model_aliases');
+
+export const vantSetModelAlias = (alias: string, target: string) =>
+  safeInvoke<void>('vant_set_model_alias', { alias, target });
+
+export const vantRemoveModelAlias = (alias: string) =>
+  safeInvoke<boolean>('vant_remove_model_alias', { alias });

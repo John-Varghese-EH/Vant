@@ -6,6 +6,7 @@ import { useOllama } from '../hooks/useOllama';
 import { useHosting } from '../hooks/useHosting';
 import { StatusDot } from './common/StatusDot';
 import { ThemeToggle } from './common/ThemeToggle';
+import { AccentSelector } from './common/AccentSelector';
 import { Logo } from './common/Logo';
 import { IconBadge } from './common/IconBadge';
 import { useToast } from './common/Toast';
@@ -69,8 +70,9 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
 
   return (
     <div className="w-full h-screen overflow-y-auto overflow-x-hidden flex flex-col items-center bg-[var(--gc-bg)] relative select-none">
-      {/* Top right theme toggle */}
-      <div className="fixed top-5 right-5 z-20">
+      {/* Top right theme & accent controls */}
+      <div className="fixed top-5 right-5 z-20 flex items-center gap-2">
+        <AccentSelector size="md" />
         <ThemeToggle size="md" />
       </div>
 

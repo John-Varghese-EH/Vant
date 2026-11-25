@@ -11,11 +11,15 @@ interface AgentShortcutsPanelProps {
   isConnected: boolean;
   tunnelUrl?: string | null;
   onNavigatePairing?: () => void;
+  selectedModel?: string;
+  remoteModels?: string[];
 }
 
 export const AgentShortcutsPanel: React.FC<AgentShortcutsPanelProps> = ({
   isConnected,
   onNavigatePairing,
+  selectedModel = '',
+  remoteModels = [],
 }) => {
   const toast = useToast();
   const { status: proxyStatus, start: startProxy } = useApiProxy();
@@ -23,6 +27,18 @@ export const AgentShortcutsPanel: React.FC<AgentShortcutsPanelProps> = ({
   const [launchingTool, setLaunchingTool] = useState<string | null>(null);
   const [showOfflineModal, setShowOfflineModal] = useState<string | null>(null);
   const [autoStarted, setAutoStarted] = useState(false);
+  const [claudeShell, setClaudeShell] = useState<'bash' | 'powershell' | 'oneliner'>('bash');
+  const [verifyingProxy, setVerifyingProxy] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [activeModel, setActiveModel] = useState<string>(selectedModel || remoteModels[0] || 'llama3.3');
+
+  useEffect(() => {
+    if (selectedModel) {
+      setActiveModel(selectedModel);
+    } else if (remoteModels.length > 0 && (!activeModel || !remoteModels.includes(activeModel))) {
+      setActiveModel(remoteModels[0]);
+    }
+  }, [selectedModel, remoteModels]);
 
   const proxyPort = proxyStatus.running && proxyStatus.port > 0 ? proxyStatus.port : 11434;
 
@@ -35,6 +51,50 @@ export const AgentShortcutsPanel: React.FC<AgentShortcutsPanelProps> = ({
       });
     }
   }, [isConnected, proxyStatus.running, autoStarted, startProxy]);
+
+  const handleVerifyProxy = async () => {
+    setVerifyingProxy(true);
+    setVerifyStatus(null);
+    try {
+      const res = await fetch(`http://127.0.0.1:${proxyPort}/api/tags`);
+      if (res.ok) {
+        const data = await res.json();
+        const models = Array.isArray(data.models) ? data.models.map((m: any) => m.name || m.model) : [];
+        const count = models.length;
+        setVerifyStatus({
+          ok: true,
+          message: count > 0 
+            ? `Ready! Found ${count} model${count === 1 ? '' : 's'} on server (${models.slice(0, 3).join(', ')}${count > 3 ? '...' : ''})`
+            : 'Proxy active. No models currently downloaded on Host server.',
+        });
+      } else {
+        setVerifyStatus({
+          ok: false,
+          message: `Proxy returned HTTP ${res.status}. Ensure Host Ollama is running.`,
+        });
+      }
+    } catch {
+      setVerifyStatus({
+        ok: false,
+        message: `Cannot connect to http://127.0.0.1:${proxyPort}. Ensure Local Proxy is active.`,
+      });
+    } finally {
+      setVerifyingProxy(false);
+    }
+  };
+
+  const getClaudeCommand = () => {
+    const model = activeModel || 'llama3.3';
+    switch (claudeShell) {
+      case 'powershell':
+        return `$env:OLLAMA_HOST = "http://127.0.0.1:${proxyPort}"; claude --provider ollama --model ${model}`;
+      case 'oneliner':
+        return `OLLAMA_HOST=http://127.0.0.1:${proxyPort} claude --provider ollama --model ${model}`;
+      case 'bash':
+      default:
+        return `export OLLAMA_HOST=http://127.0.0.1:${proxyPort} && claude --provider ollama --model ${model}`;
+    }
+  };
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -150,43 +210,123 @@ export const AgentShortcutsPanel: React.FC<AgentShortcutsPanelProps> = ({
       {/* Coding Agents 1-Click Configs */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Claude Code */}
-        <div className="double-bezel group hover:border-violet-500/30 transition-all">
-          <div className="double-bezel-inner h-full flex flex-col justify-between">
+        <div className="double-bezel group hover:border-violet-500/30 transition-all col-span-1 md:col-span-2">
+          <div className="double-bezel-inner h-full flex flex-col justify-between bg-[var(--gc-surface)] p-4 sm:p-5">
             <div>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
                 <div className="flex items-center gap-2.5">
-                  <IconBadge icon={<Icon name="terminal" size={17} />} variant="amber" size="md" className="group-hover:scale-105" />
+                  <IconBadge icon={<Icon name="terminal" size={18} />} variant="amber" size="md" className="group-hover:scale-105" />
                   <div>
-                    <h3 className="text-sm font-bold text-[var(--gc-text)] group-hover:text-accent transition-colors">Claude Code</h3>
-                    <div className="text-[11px] text-[var(--gc-text-muted)] font-mono">Terminal CLI Agent</div>
+                    <h3 className="text-sm sm:text-base font-bold text-[var(--gc-text)] group-hover:text-accent transition-colors flex items-center gap-2">
+                      Claude Code CLI
+                    </h3>
+                    <div className="text-[11px] text-[var(--gc-text-muted)] font-mono">Anthropic Terminal Agent</div>
                   </div>
                 </div>
-                <Badge variant="info">Ollama Provider</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="success">No Client Ollama Needed</Badge>
+                  <Badge variant="info">Ollama Provider</Badge>
+                </div>
               </div>
+
               <p className="text-xs text-[var(--gc-text-muted)] mt-3 leading-relaxed">
-                Direct Claude Code CLI to consume your remote Host GPU inference endpoint as its backend model.
+                Run Claude Code directly in your project folder on your laptop. All LLM weights and token generation execute on your remote Host GPU over Vant&apos;s encrypted Noise tunnel.
               </p>
+
+              {/* Model Picker & Shell Switcher */}
+              <div className="mt-4 pt-3 border-t border-[var(--gc-border)] flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-[var(--gc-text-muted)] uppercase tracking-wider">Host Model:</span>
+                  {remoteModels.length > 0 ? (
+                    <select
+                      value={activeModel}
+                      onChange={e => setActiveModel(e.target.value)}
+                      className="bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] rounded-lg px-2.5 py-1 text-xs font-mono text-[var(--gc-text)] outline-none focus:border-accent cursor-pointer"
+                    >
+                      {remoteModels.map(m => (
+                        <option key={m} value={m} className="bg-[var(--gc-surface)] text-[var(--gc-text)]">
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="text-xs font-mono px-2 py-0.5 rounded bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] text-accent">
+                      {activeModel || 'llama3.3'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Shell Format Selector */}
+                <div className="flex items-center bg-[var(--gc-surface-sunken)] p-0.5 rounded-lg border border-[var(--gc-border)] text-[11px]">
+                  <button
+                    onClick={() => setClaudeShell('bash')}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${claudeShell === 'bash' ? 'bg-accent text-white shadow-sm' : 'text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]'}`}
+                  >
+                    macOS / Linux
+                  </button>
+                  <button
+                    onClick={() => setClaudeShell('powershell')}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${claudeShell === 'powershell' ? 'bg-accent text-white shadow-sm' : 'text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]'}`}
+                  >
+                    Windows (PowerShell)
+                  </button>
+                  <button
+                    onClick={() => setClaudeShell('oneliner')}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${claudeShell === 'oneliner' ? 'bg-accent text-white shadow-sm' : 'text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]'}`}
+                  >
+                    One-Liner
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-[var(--gc-border)] flex flex-col gap-2">
-              <div className="bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] rounded-xl p-2.5 font-mono text-xs text-[var(--gc-text)] flex items-center justify-between">
-                <code className="text-accent select-all">export OLLAMA_HOST=http://127.0.0.1:{proxyPort}</code>
+            {/* Run Command Block */}
+            <div className="mt-3 flex flex-col gap-2.5">
+              <div className="bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] rounded-xl p-3 font-mono text-xs text-[var(--gc-text)] flex items-center justify-between gap-3">
+                <code className="text-accent select-all break-all overflow-x-auto">
+                  {getClaudeCommand()}
+                </code>
                 <button
-                  onClick={() =>
-                    copyToClipboard(
-                      `export OLLAMA_HOST=http://127.0.0.1:${proxyPort} && claude --provider ollama`,
-                      'claude'
-                    )
-                  }
-                  className="p-1.5 rounded-lg hover:bg-[var(--gc-border)] text-[var(--gc-text-muted)] hover:text-[var(--gc-text)] transition-colors cursor-pointer"
-                  title="Copy shell export command"
+                  onClick={() => copyToClipboard(getClaudeCommand(), 'claude_command')}
+                  className="p-1.5 rounded-lg hover:bg-[var(--gc-border)] text-[var(--gc-text-muted)] hover:text-[var(--gc-text)] transition-colors cursor-pointer shrink-0"
+                  title="Copy full command"
                 >
-                  {copiedKey === 'claude' ? <Icon name="check" size={14} className="text-emerald-400" /> : <Icon name="content_copy" size={14} />}
+                  {copiedKey === 'claude_command' ? <Icon name="check" size={15} className="text-emerald-400" /> : <Icon name="content_copy" size={15} />}
                 </button>
               </div>
-              <div className="text-[11px] text-[var(--gc-text-muted)]">
-                Run <code className="text-[var(--gc-text)] font-mono bg-[var(--gc-surface-sunken)] px-1 rounded">claude --provider ollama --model &lt;model&gt;</code> in your project.
+
+              {/* Install and Verification Helpers */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-[var(--gc-text-muted)]">
+                <div className="flex items-center gap-1.5">
+                  <span>First time? Install CLI:</span>
+                  <button
+                    onClick={() => copyToClipboard('npm install -g @anthropic-ai/claude-code', 'claude_install')}
+                    className="font-mono bg-[var(--gc-surface-sunken)] hover:bg-[var(--gc-border)] text-[var(--gc-text)] px-1.5 py-0.5 rounded border border-[var(--gc-border)] flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Click to copy install command"
+                  >
+                    <code>npm i -g @anthropic-ai/claude-code</code>
+                    {copiedKey === 'claude_install' ? <Icon name="check" size={12} className="text-emerald-400" /> : <Icon name="content_copy" size={12} />}
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleVerifyProxy}
+                  disabled={verifyingProxy}
+                  className="flex items-center gap-1.5 text-accent hover:underline cursor-pointer disabled:opacity-50"
+                  title="Test whether Vant's local proxy can reach Host models"
+                >
+                  {verifyingProxy ? <Icon name="refresh" size={13} className="animate-spin" /> : <Icon name="network_check" size={13} />}
+                  <span>{verifyingProxy ? 'Testing Endpoint...' : 'Verify Client Endpoint'}</span>
+                </button>
               </div>
+
+              {/* Live Verification Status */}
+              {verifyStatus && (
+                <div className={`text-xs p-2.5 rounded-lg flex items-center gap-2 border ${verifyStatus.ok ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                  <Icon name={verifyStatus.ok ? 'check_circle' : 'error'} size={15} className="shrink-0" />
+                  <span>{verifyStatus.message}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

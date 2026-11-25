@@ -16,6 +16,9 @@ pub mod sys_monitor;
 pub mod docker;
 pub mod recipes;
 pub mod orchestrator;
+pub mod model_alias;
+pub mod integrations;
+pub mod cli;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1088,6 +1091,125 @@ async fn rename_device(
         .map_err(|e| format!("{}", e))
 }
 
+#[cfg(target_os = "windows")]
+fn apply_window_accent_dwm(window: &tauri::WebviewWindow, hex_accent: &str) {
+    extern "system" {
+        fn LoadLibraryA(lpLibFileName: *const u8) -> *mut std::ffi::c_void;
+        fn GetProcAddress(hModule: *mut std::ffi::c_void, lpProcName: *const u8) -> *mut std::ffi::c_void;
+    }
+    type DwmSetWindowAttributeFn = unsafe extern "system" fn(
+        hwnd: *mut std::ffi::c_void,
+        dwAttribute: u32,
+        pvAttribute: *const std::ffi::c_void,
+        cbAttribute: u32,
+    ) -> i32;
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let dwmapi = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
+            if !dwmapi.is_null() {
+                let proc = GetProcAddress(dwmapi, b"DwmSetWindowAttribute\0".as_ptr());
+                if !proc.is_null() {
+                    let set_attr: DwmSetWindowAttributeFn = std::mem::transmute(proc);
+                    let hwnd_raw = hwnd.0 as *mut std::ffi::c_void;
+
+                    // 1. DWMWA_USE_IMMERSIVE_DARK_MODE (20)
+                    let dark_mode: i32 = 1;
+                    let _ = set_attr(hwnd_raw, 20, &dark_mode as *const _ as *const std::ffi::c_void, 4);
+
+                    // 2. DWMWA_CAPTION_COLOR (35) - deep obsidian #09090F (COLORREF is 0x00BBGGRR)
+                    let caption_color: u32 = 0x000F0909;
+                    let _ = set_attr(hwnd_raw, 35, &caption_color as *const _ as *const std::ffi::c_void, 4);
+
+                    // 3. DWMWA_TEXT_COLOR (36) - white #F5F5FA
+                    let text_color: u32 = 0x00FAF5F5;
+                    let _ = set_attr(hwnd_raw, 36, &text_color as *const _ as *const std::ffi::c_void, 4);
+
+                    // 4. DWMWA_BORDER_COLOR (34) - custom accent color
+                    let hex = hex_accent.trim_start_matches('#');
+                    if hex.len() == 6 {
+                        if let (Ok(r), Ok(g), Ok(b)) = (
+                            u8::from_str_radix(&hex[0..2], 16),
+                            u8::from_str_radix(&hex[2..4], 16),
+                            u8::from_str_radix(&hex[4..6], 16),
+                        ) {
+                            let border_color: u32 = ((b as u32) << 16) | ((g as u32) << 8) | (r as u32);
+                            let _ = set_attr(hwnd_raw, 34, &border_color as *const _ as *const std::ffi::c_void, 4);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_window_accent_dwm(_window: &tauri::WebviewWindow, _hex_accent: &str) {}
+
+#[tauri::command]
+async fn set_window_accent(
+    accent_hex: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        apply_window_accent_dwm(&window, &accent_hex);
+    }
+    Ok(())
+}
+
+// -- Vant Integrations & Aliases --
+
+#[tauri::command]
+async fn vant_list_integrations() -> Result<Vec<crate::integrations::IntegrationMetadata>, String> {
+    Ok(crate::integrations::list_integrations_meta())
+}
+
+#[tauri::command]
+async fn vant_launch_integration(
+    id: String,
+    model: String,
+    config_only: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let integration = crate::integrations::IntegrationCatalog::find(&id)
+        .ok_or_else(|| format!("Integration '{}' not found", id))?;
+
+    let settings = state.settings.lock().await.get();
+    let port = settings.api_proxy_port;
+    let endpoint = format!("http://127.0.0.1:{}", port);
+
+    if config_only {
+        let path = integration.inject_config(&model, &endpoint)?;
+        Ok(format!("Configuration successfully injected into {}", path))
+    } else {
+        integration.inject_config(&model, &endpoint)?;
+        let m = model.clone();
+        let ep = endpoint.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = integration.execute(&m, &[], &ep);
+        });
+        Ok(format!("Launched {} with model {}", id, model))
+    }
+}
+
+#[tauri::command]
+async fn vant_list_model_aliases() -> Result<std::collections::HashMap<String, String>, String> {
+    Ok(crate::model_alias::ModelAliasStore::list_aliases())
+}
+
+#[tauri::command]
+async fn vant_set_model_alias(alias: String, target: String) -> Result<(), String> {
+    crate::model_alias::ModelAliasStore::set_alias(&alias, &target)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn vant_remove_model_alias(alias: String) -> Result<bool, String> {
+    let removed = crate::model_alias::ModelAliasStore::remove_alias(&alias)?;
+    Ok(removed)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1204,6 +1326,10 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            if let Some(window) = app.get_webview_window("main") {
+                apply_window_accent_dwm(&window, "#8b5cf6");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1272,6 +1398,14 @@ pub fn run() {
             update_peer_role,
             generate_peer_api_token,
             rename_device,
+            // Window Accent Theme
+            set_window_accent,
+            // Vant Integrations & Aliases
+            vant_list_integrations,
+            vant_launch_integration,
+            vant_list_model_aliases,
+            vant_set_model_alias,
+            vant_remove_model_alias,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run application");
