@@ -1,16 +1,8 @@
 <div align="center">
 
   <img src="public/Vant_banner.gif" alt="Vant Banner" width="100%" style="border-radius: 16px; margin-bottom: 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);" />
-
-  <br />
-
-  <img src="public/Vant_logo-icon.png" alt="Vant Icon" width="96" height="96" />
-
-  <br /><br />
-
-  # Vant
-
-  ### Apple-grade P2P Distributed GPU & AI Compute Mesh
+ 
+ ### P2P Distributed GPU & AI Compute Mesh
   **Transform any GPU workstation or gaming PC into a private, encrypted AI supercomputer accessible from any client laptop.**
 
   <br />
