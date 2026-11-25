@@ -606,10 +606,13 @@ async fn connect_to_url(
     state: tauri::State<'_, AppState>,
     url: String,
 ) -> Result<(), String> {
+    let clean_url = url
+        .trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '`' || c == ' ' || c == '\t' || c == '\r' || c == '\n')
+        .to_string();
     let mut client = state.client.lock().await;
     let noise_priv = state.identity.noise_private;
     client
-        .connect_url(noise_priv, &url, Some(app.clone()))
+        .connect_url(noise_priv, &clean_url, Some(app.clone()))
         .await
         .map_err(|e| format!("{}", e))?;
 
@@ -617,23 +620,27 @@ async fn connect_to_url(
 
     let mut token = None;
     let mut code = None;
-    if let Ok(parsed) = url::Url::parse(&url) {
+    if let Ok(parsed) = url::Url::parse(&clean_url) {
         for (k, v) in parsed.query_pairs() {
             if k == "token" {
-                token = Some(v.into_owned());
+                let clean_t = v.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ');
+                token = Some(clean_t.to_string());
             } else if k == "code" || k == "pin" {
-                code = Some(v.into_owned());
+                let clean_c = v.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ');
+                code = Some(clean_c.to_string());
             }
         }
     }
     if token.is_none() || code.is_none() {
-        if let Some((_, query)) = url.split_once('?') {
+        if let Some((_, query)) = clean_url.split_once('?') {
             for pair in query.split('&') {
                 if let Some((k, v)) = pair.split_once('=') {
                     if k == "token" && token.is_none() {
-                        token = Some(v.to_string());
+                        let clean_t = v.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ');
+                        token = Some(clean_t.to_string());
                     } else if (k == "code" || k == "pin") && code.is_none() {
-                        code = Some(v.to_string());
+                        let clean_c = v.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ');
+                        code = Some(clean_c.to_string());
                     }
                 }
             }

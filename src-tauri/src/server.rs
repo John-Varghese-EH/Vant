@@ -198,6 +198,11 @@ impl HostServer {
                                                                         
                                                                         let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
+                                                                        if action == "ping" {
+                                                                            let _ = tx_out.send(b"{\"action\":\"pong\"}".to_vec()).await;
+                                                                            continue;
+                                                                        }
+
                                                                         if action == "pair" {
                                                                             if is_trusted {
                                                                                 let _ = tx_out.send(b"{\"action\":\"pair_ok\",\"done\":true}".to_vec()).await;
@@ -206,17 +211,21 @@ impl HostServer {
 
                                                                             let mut code_matched = false;
                                                                             if let Some(code) = parsed.get("code").and_then(|v| v.as_str()) {
+                                                                                let clean_code = code.trim().replace('-', "").replace(' ', "");
                                                                                 let pcode = app_state.pairing_code.lock().await;
                                                                                 if let Some(ref pc) = *pcode {
-                                                                                    if pc.code == code && chrono::Utc::now() < pc.expires_at {
+                                                                                    let clean_pc = pc.code.trim().replace('-', "").replace(' ', "");
+                                                                                    if clean_pc == clean_code && chrono::Utc::now() < pc.expires_at {
                                                                                         code_matched = true;
                                                                                     }
                                                                                 }
                                                                             }
                                                                             if let Some(token) = parsed.get("token").and_then(|v| v.as_str()) {
+                                                                                let clean_token = token.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ' || c == '\t' || c == '\r' || c == '\n');
                                                                                 let plink = app_state.pairing_link.lock().await;
                                                                                 if let Some(ref pl) = *plink {
-                                                                                    if pl.token == token && chrono::Utc::now() < pl.expires_at {
+                                                                                    let clean_pl = pl.token.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '/' || c == '`' || c == ' ' || c == '\t' || c == '\r' || c == '\n');
+                                                                                    if clean_pl == clean_token && chrono::Utc::now() < pl.expires_at {
                                                                                         code_matched = true;
                                                                                     }
                                                                                 }
@@ -302,10 +311,6 @@ impl HostServer {
                                                                         if !is_trusted {
                                                                             log::warn!("Rejected untrusted peer message from: {}", peer_id);
                                                                             let _ = tx_out.send(b"{\"error\":\"Not paired\",\"done\":true}".to_vec()).await;
-                                                                            break;
-                                                                        }
-                                                                        if action == "ping" {
-                                                                            let _ = tx_out.send(b"{\"action\":\"pong\"}".to_vec()).await;
                                                                             continue;
                                                                         }
 
@@ -1957,6 +1962,24 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
           if (launchAppText) launchAppText.textContent = "Launch in Vant Client";
         }
 
+        function markHandedOff() {
+          if (stateBanner) {
+            stateBanner.className = "state-banner state-banner-active";
+            stateBanner.innerHTML = "<strong>Handoff dispatched!</strong> Continue on your Vant desktop app. You can safely close this tab.";
+          }
+        }
+
+        if (launchAppBtn) {
+          launchAppBtn.addEventListener("click", function() {
+            setTimeout(markHandedOff, 300);
+          });
+        }
+        if (launchLocalhostBtn) {
+          launchLocalhostBtn.addEventListener("click", function() {
+            setTimeout(markHandedOff, 300);
+          });
+        }
+
         // Attempt protocol handler launch
         try {
           window.location.href = deepLink;
@@ -1965,9 +1988,9 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         // Fallback guidance if protocol handler fails or isn't supported on Linux
         setTimeout(function() {
           if (stateBanner) {
-            stateBanner.innerHTML = "If your desktop app did not open automatically, click <strong>Pair with Vant Client</strong>, use the <strong>Connect via Localhost App</strong> button (recommended for Linux), or copy the endpoint below.";
+            stateBanner.innerHTML = "Pairing initiated. <strong>Continue on your Vant app</strong> (you can safely close this tab). If your app did not open, click <strong>Pair with Vant Client</strong> or <strong>Connect via Localhost App</strong>.";
           }
-        }, 2200);
+        }, 1800);
 
       } else {
         // NO PAIRING TOKEN PROVIDED

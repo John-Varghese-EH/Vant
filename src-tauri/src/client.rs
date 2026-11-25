@@ -106,7 +106,9 @@ impl ClientConnection {
     ) -> Result<(), ClientError> {
         self.status = ConnectionStatus::Connecting;
 
-        let mut clean_url = url.trim().to_string();
+        let mut clean_url = url
+            .trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '`' || c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            .to_string();
 
         // 1. Deep link unpacker: vant://pair?url=...&token=... (or ghostcompute://)
         if clean_url.starts_with("vant://") || clean_url.starts_with("ghostcompute://") {
@@ -134,8 +136,14 @@ impl ClientConnection {
 
         // 2. Cleanly separate base endpoint from query parameters (e.g. ?token=...)
         let (raw_base, query) = match clean_url.split_once('?') {
-            Some((base, q)) => (base.trim_end_matches('/'), Some(q)),
-            None => (clean_url.trim_end_matches('/'), None),
+            Some((base, q)) => (
+                base.trim_end_matches('/').trim_end_matches('\\'),
+                Some(q.trim_matches(|c| c == '"' || c == '\'' || c == '\\' || c == '`' || c == ' ' || c == '\t' || c == '\r' || c == '\n')),
+            ),
+            None => (
+                clean_url.trim_end_matches('/').trim_end_matches('\\'),
+                None,
+            ),
         };
 
         let mut ws_base = raw_base.to_string();

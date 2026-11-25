@@ -60,12 +60,20 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
 
   useEffect(() => {
     const autoTarget = localStorage.getItem('vant_auto_connect') || localStorage.getItem('gc_auto_connect');
+    const autoToken = localStorage.getItem('vant_auto_token') || localStorage.getItem('gc_auto_token');
     if (autoTarget) {
-      setCodeInputValue(autoTarget);
+      let finalTarget = autoTarget.trim().replace(/^['"`\\]+|['"`\\]+$/g, '');
+      if (autoToken && !finalTarget.includes('token=')) {
+        const sep = finalTarget.includes('?') ? '&' : '?';
+        finalTarget = `${finalTarget}${sep}token=${encodeURIComponent(autoToken.trim().replace(/^['"`\\]+|['"`\\]+$/g, ''))}`;
+      }
+      setCodeInputValue(finalTarget);
       setActiveTab('code');
       localStorage.removeItem('vant_auto_connect');
       localStorage.removeItem('gc_auto_connect');
-      connectToUrl(autoTarget).catch(console.error);
+      localStorage.removeItem('vant_auto_token');
+      localStorage.removeItem('gc_auto_token');
+      connectToUrl(finalTarget).catch(console.error);
     }
   }, [connectToUrl]);
 
@@ -645,9 +653,9 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
 
             <form onSubmit={async (e) => {
               e.preventDefault();
-              const val = codeInputValue.trim();
+              const val = codeInputValue.trim().replace(/^['"`\\]+|['"`\\]+$/g, '');
               if (val) {
-                if (val.includes('.') || val.startsWith('http')) {
+                if (val.includes('.') || val.startsWith('http') || val.startsWith('ws') || val.startsWith('vant://')) {
                   saveRecentHost(val);
                   connectToUrl(val).catch((err) => {
                     console.error('Connection attempt failed:', err);

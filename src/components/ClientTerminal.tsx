@@ -128,7 +128,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
 
   const isConnected = typeof status === 'object' && status !== null && 'Connected' in status;
   const isConnecting = typeof status === 'object' && status !== null && 'Connecting' in status;
-  const proxyPort = proxyStatus.running && proxyStatus.port > 0 ? proxyStatus.port : 11434;
+  const proxyPort = proxyStatus?.running && proxyStatus?.port > 0 ? proxyStatus.port : 11434;
 
   const { peers: discoveredPeers, startSearching, stopSearching } = useDiscovery();
   const [pairedDeviceIds, setPairedDeviceIds] = useState<string[]>([]);
@@ -136,7 +136,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
   useEffect(() => {
     if (!isConnected && !isConnecting) {
       getPairedDevices().then(devices => {
-        setPairedDeviceIds(devices.map(d => d.peer_id));
+        setPairedDeviceIds((devices || []).map(d => d.peer_id));
         startSearching();
       }).catch(console.error);
     } else {

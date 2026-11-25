@@ -33,7 +33,34 @@ async function safeInvoke<T>(cmd: string, args?: any): Promise<T> {
   const normArgs = normalizeArgs(args);
   if (!isTauri) {
     console.warn(`[Vant Web Preview] Mocking IPC invoke for: ${cmd}`);
-    // Provide sensible mocks for browser view
+    if (cmd === 'get_api_proxy_status') {
+      return { running: false, port: 0, endpoint: '' } as unknown as T;
+    }
+    if (cmd === 'get_ollama_status') {
+      return { installed: true, running: false, models: [] } as unknown as T;
+    }
+    if (cmd === 'get_host_sys_stats') {
+      return {
+        cpu_percent: 8.5,
+        memory_used_mb: 4096,
+        memory_total_mb: 16384,
+        memory_percent: 25.0,
+        gpu_percent: null,
+        gpu_vram_used_mb: null,
+        gpu_vram_total_mb: null,
+        gpu_name: null,
+        gpu_temp_c: null,
+      } as unknown as T;
+    }
+    if (cmd === 'get_pairing_code' || cmd === 'get_active_pairing_link') {
+      return null as unknown as T;
+    }
+    if (cmd === 'get_pairing_state') {
+      return 'Idle' as unknown as T;
+    }
+    if (cmd === 'get_active_sessions') {
+      return [] as unknown as T;
+    }
     if (cmd === 'get_connection_status') {
       return { Disconnected: null } as unknown as T;
     }

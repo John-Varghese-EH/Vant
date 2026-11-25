@@ -16,7 +16,9 @@ export function useApiProxy() {
   const refreshStatus = useCallback(async () => {
     try {
       const currentStatus = await getApiProxyStatus();
-      setStatus(currentStatus);
+      if (currentStatus) {
+        setStatus(currentStatus);
+      }
     } catch (err) {
       console.error('Failed to fetch api proxy status:', err);
     }

@@ -92,11 +92,12 @@ export function usePairing() {
   }, []);
 
   const connectToUrl = useCallback(async (url: string) => {
-    console.log('[Vant Debug] Attempting connection to host:', url);
+    const cleanUrl = url.trim().replace(/^['"`\\]+|['"`\\]+$/g, '');
+    console.log('[Vant Debug] Attempting connection to host:', cleanUrl);
     setState('Discovering');
     try {
-      await invokeConnectToUrl(url);
-      console.log('[Vant Debug] Connected successfully to host:', url);
+      await invokeConnectToUrl(cleanUrl);
+      console.log('[Vant Debug] Connected successfully to host:', cleanUrl);
       const updated = await getPairingState();
       setState(updated);
     } catch (err: any) {
