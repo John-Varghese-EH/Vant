@@ -32,7 +32,7 @@ function normalizeArgs(args?: any): any {
 async function safeInvoke<T>(cmd: string, args?: any): Promise<T> {
   const normArgs = normalizeArgs(args);
   if (!isTauri) {
-    console.warn(`[GhostCompute Web Preview] Mocking IPC invoke for: ${cmd}`);
+    console.warn(`[Vant Web Preview] Mocking IPC invoke for: ${cmd}`);
     // Provide sensible mocks for browser view
     if (cmd === 'get_connection_status') {
       return { Disconnected: null } as unknown as T;
@@ -94,6 +94,7 @@ export type UserRole = 'admin' | 'developer' | 'viewer';
 export interface TrustedPeer {
   peer_id: string;
   device_name: string;
+  nickname?: string | null;
   noise_public_key: string;
   paired_at: string;
   last_seen: string | null;
@@ -138,6 +139,7 @@ export interface ModelInfo {
 export interface SessionInfo {
   peer_id: string;
   device_name: string;
+  nickname?: string | null;
   connected_at: string;
   active: boolean;
 }
@@ -172,6 +174,8 @@ export interface IdentityInfo {
 
 export interface SystemStats {
   cpu_usage_percent: number;
+  cpu_brand?: string;
+  cpu_cores?: number;
   total_memory_mb: number;
   used_memory_mb: number;
   total_swap_mb: number;
@@ -183,6 +187,9 @@ export interface SystemStats {
   gpu_vram_total_mb?: number | null;
   gpu_vram_used_mb?: number | null;
   gpu_temp_celsius?: number | null;
+  gpu_utilization_percent?: number | null;
+  accelerators?: string[];
+  is_remote?: boolean | null;
 }
 
 // Docker & Hardware
@@ -279,6 +286,8 @@ export const getPairingState = () => safeInvoke<PairingState>('get_pairing_state
 export const getPairedDevices = () => safeInvoke<TrustedPeer[]>('get_paired_devices');
 export const revokeDevice = (peer_id: string) => safeInvoke<void>('revoke_device', { peer_id });
 export const removeDevice = (peer_id: string) => safeInvoke<void>('remove_device', { peer_id });
+export const renameDevice = (peer_id: string, nickname: string | null) =>
+  safeInvoke<void>('rename_device', { peer_id, nickname });
 export const updatePeerRole = (peer_id: string, role: string, rate_limit_rpm: number) =>
   safeInvoke<void>('update_peer_role', { peer_id, role, rate_limit_rpm });
 export const generatePeerApiToken = (peer_id: string) =>
@@ -287,8 +296,22 @@ export const generatePeerApiToken = (peer_id: string) =>
 // Connection
 export const connectToHost = (peer_id: string) => safeInvoke<void>('connect_to_host', { peer_id });
 export const disconnectFromHost = () => safeInvoke<void>('disconnect_from_host');
-export const sendChatMessage = (message: string, model?: string) =>
-  safeInvoke<void>('send_chat_message', { message, model });
+export const sendChatMessage = (
+  message: string,
+  model?: string,
+  options?: {
+    messages?: ChatMessage[];
+    system_prompt?: string;
+    temperature?: number;
+  }
+) =>
+  safeInvoke<void>('send_chat_message', {
+    message,
+    model,
+    messages: options?.messages,
+    system_prompt: options?.system_prompt,
+    temperature: options?.temperature,
+  });
 export const getConnectionStatus = () => safeInvoke<ConnectionStatus>('get_connection_status');
 export const getAvailableModels = () => safeInvoke<ModelInfo[]>('get_available_models');
 export const getRemoteModels = () => safeInvoke<string[]>('get_remote_models');
@@ -302,9 +325,11 @@ export const killSession = (peer_id: string) => safeInvoke<void>('kill_session',
 export const killAllSessions = () => safeInvoke<void>('kill_all_sessions');
 export const getActiveTunnelUrl = () => safeInvoke<string | null>('get_active_tunnel_url');
 export const startQuickTunnel = () => safeInvoke<string>('start_quick_tunnel');
+export const stopQuickTunnel = () => safeInvoke<void>('stop_quick_tunnel');
 
 // Ollama
 export const getOllamaStatus = () => safeInvoke<OllamaStatus>('get_ollama_status');
+export const startOllama = () => safeInvoke<void>('start_ollama');
 export const pullModel = (name: string) => safeInvoke<void>('pull_model', { name });
 export const swapModel = (name: string) => safeInvoke<void>('swap_model', { name });
 
@@ -325,6 +350,8 @@ export interface ApiProxyStatus {
 export const startApiProxy = () => safeInvoke<void>('start_api_proxy');
 export const stopApiProxy = () => safeInvoke<void>('stop_api_proxy');
 export const getApiProxyStatus = () => safeInvoke<ApiProxyStatus>('get_api_proxy_status');
+export const ensureServiceTunnelPort = (port: number) =>
+  safeInvoke<number>('ensure_service_tunnel_port', { port });
 export const getHostSysStats = () => safeInvoke<SystemStats>('get_host_sys_stats');
 export const getLocalIp = () => safeInvoke<string>('get_local_ip');
 

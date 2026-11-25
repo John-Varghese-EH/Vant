@@ -7,7 +7,8 @@ use thiserror::Error;
 
 use crate::transport::NOISE_PATTERN;
 
-const KEYRING_SERVICE: &str = "com.ghostcompute";
+const KEYRING_SERVICE: &str = "com.vant";
+const LEGACY_KEYRING_SERVICE: &str = "com.ghostcompute";
 const KEYRING_USER: &str = "identity_keys";
 
 #[derive(Debug, Error)]
@@ -97,11 +98,19 @@ impl NodeIdentity {
         let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
             .map_err(|e| IdentityError::Keyring(format!("{}", e)))?;
 
-        let stored = entry
-            .get_password()
-            .map_err(|e| IdentityError::Keyring(format!("{}", e)))?;
-
-        Self::from_hex(&stored)
+        match entry.get_password() {
+            Ok(stored) => Self::from_hex(&stored),
+            Err(e) => {
+                if let Ok(legacy_entry) = keyring::Entry::new(LEGACY_KEYRING_SERVICE, KEYRING_USER) {
+                    if let Ok(stored) = legacy_entry.get_password() {
+                        let identity = Self::from_hex(&stored)?;
+                        let _ = identity.save_to_keyring();
+                        return Ok(identity);
+                    }
+                }
+                Err(IdentityError::Keyring(format!("{}", e)))
+            }
+        }
     }
 
     fn save_to_keyring(&self) -> Result<(), IdentityError> {

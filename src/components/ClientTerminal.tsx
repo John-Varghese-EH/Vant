@@ -16,6 +16,8 @@ import { connectToHost } from '../lib/tauri';
 import { Logo } from './common/Logo';
 import { ThemeToggle } from './common/ThemeToggle';
 import { CustomSelect } from './common/CustomSelect';
+import { useApiProxy } from '../hooks/useApiProxy';
+import { useToast } from './common/Toast';
 
 export interface SystemPersona {
   id: string;
@@ -105,10 +107,13 @@ interface ClientTerminalProps {
 }
 
 export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) => {
+  const toast = useToast();
   const { status, disconnect } = useConnection();
   const { messages, sendMessage, isStreaming, clearMessages } = useChat();
+  const { status: proxyStatus, start: startProxy } = useApiProxy();
   const [inputVal, setInputVal] = useState('');
   const [remoteModels, setRemoteModels] = useState<string[]>([]);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'chat' | 'agents' | 'pairing' | 'integrations' | 'telemetry'>('chat');
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -123,10 +128,11 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
 
   const isConnected = typeof status === 'object' && status !== null && 'Connected' in status;
   const isConnecting = typeof status === 'object' && status !== null && 'Connecting' in status;
+  const proxyPort = proxyStatus.running && proxyStatus.port > 0 ? proxyStatus.port : 11434;
 
   const { peers: discoveredPeers, startSearching, stopSearching } = useDiscovery();
   const [pairedDeviceIds, setPairedDeviceIds] = useState<string[]>([]);
-  
+
   useEffect(() => {
     if (!isConnected && !isConnecting) {
       getPairedDevices().then(devices => {
@@ -148,12 +154,28 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
     }
   }, [discoveredPeers, pairedDeviceIds, isConnected, isConnecting]);
 
+  const refreshModels = async () => {
+    if (!isConnected) return;
+    setIsRefreshingModels(true);
+    try {
+      const models = await getRemoteModels();
+      setRemoteModels(models);
+      if (models.length > 0 && (!selectedModel || !models.includes(selectedModel))) {
+        setSelectedModel(models[0]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch remote models:', err);
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  };
+
   useEffect(() => {
     if (isConnected) {
-      getRemoteModels().then(models => {
-        setRemoteModels(models);
-        if (models.length > 0) setSelectedModel(models[0]);
-      }).catch(console.error);
+      refreshModels();
+      if (!proxyStatus.running) {
+        startProxy().catch(() => {});
+      }
     } else {
       setRemoteModels([]);
       setSelectedModel('');
@@ -165,17 +187,16 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
   }, [messages, isStreaming]);
 
   const handleSend = () => {
-    if (inputVal.trim() && isConnected) {
-      let finalPrompt = inputVal.trim();
-      const activePrompt = selectedPersona.id === 'custom' 
-        ? customSystemPrompt.trim() 
+    if (inputVal.trim() && isConnected && !isStreaming) {
+      const prompt = inputVal.trim();
+      const activePrompt = selectedPersona.id === 'custom'
+        ? customSystemPrompt.trim()
         : selectedPersona.systemPrompt;
 
-      if (activePrompt) {
-        finalPrompt = `[System Directive: ${activePrompt} (Temperature: ${temperature.toFixed(2)})]\n\n${finalPrompt}`;
-      }
-
-      sendMessage(finalPrompt, selectedModel || undefined);
+      sendMessage(prompt, selectedModel || undefined, {
+        systemPrompt: activePrompt || undefined,
+        temperature,
+      });
       setInputVal('');
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -201,8 +222,8 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
     if (messages.length === 0) return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const dateStr = new Date().toLocaleString();
-    
-    let md = `# GhostCompute Session Transcript\n\n`;
+
+    let md = `# Vant Session Transcript\n\n`;
     md += `- **Date:** ${dateStr}\n`;
     md += `- **Host Node:** Active Remote Peer\n`;
     md += `- **Model:** ${selectedModel || 'Default'}\n`;
@@ -213,60 +234,51 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
 
     messages.forEach((msg) => {
       const sender = msg.role === 'user' ? '### User' : '### Host Compute Engine';
-      let content = msg.content;
-      if (msg.role === 'user' && content.startsWith('[System Directive:')) {
-        content = content.replace(/^\[System Directive:[^\]]+\]\n\n/, '');
-      }
       md += `${sender} (${new Date(msg.timestamp).toLocaleTimeString()})\n\n`;
-      md += `${content}\n\n---\n\n`;
+      md += `${msg.content}\n\n---\n\n`;
     });
 
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ghostcompute-session-${timestamp}.md`;
+    a.download = `vant-session-${timestamp}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    toast.success('Transcript Exported', 'Saved markdown chat log.');
   };
 
   const copyProxyUrl = () => {
-    navigator.clipboard.writeText('http://127.0.0.1:11434');
+    navigator.clipboard.writeText(`http://127.0.0.1:${proxyPort}`);
     setCopiedProxy(true);
     setTimeout(() => setCopiedProxy(false), 2000);
   };
 
-  // High-fidelity Markdown renderer with support for lists, headers, quotes, tables, and inline code
+  const escapeHtml = (unsafe: string): string =>
+    unsafe
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
   const formatMarkdownText = (raw: string): string => {
-    let text = raw;
-    // Headers
+    let text = escapeHtml(raw);
     text = text.replace(/^### (.*$)/gim, '<h4 style="font-size: 14.5px; font-weight: 700; margin: 10px 0 4px; color: var(--gc-text);">$1</h4>');
     text = text.replace(/^## (.*$)/gim, '<h3 style="font-size: 16px; font-weight: 700; margin: 12px 0 6px; color: var(--gc-text);">$1</h3>');
     text = text.replace(/^# (.*$)/gim, '<h2 style="font-size: 18px; font-weight: 700; margin: 14px 0 8px; color: var(--gc-text);">$1</h2>');
-    // Bold & italic
     text = text.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
     text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    // Blockquote
-    text = text.replace(/^\> (.*$)/gim, '<blockquote style="border-left: 3px solid var(--gc-accent); padding-left: 10px; margin: 6px 0; color: var(--gc-text-muted); font-style: italic;">$1</blockquote>');
-    // Unordered lists
+    text = text.replace(/^&gt; (.*$)/gim, '<blockquote style="border-left: 3px solid var(--gc-accent); padding-left: 10px; margin: 6px 0; color: var(--gc-text-muted); font-style: italic;">$1</blockquote>');
     text = text.replace(/^\s*[-*]\s+(.*$)/gim, '<li style="margin-left: 18px; margin-bottom: 2px;">$1</li>');
-    // Inline code
-    text = text.replace(/`([^`]+)`/g, '<code class="text-mono" style="background: var(--gc-surface-sunken); border: 1px solid var(--gc-border); padding: 2px 5px; border-radius: var(--gc-squircle-sm); corner-shape: squircle; font-size: 12px; color: var(--gc-accent-light);">$1</code>');
-    // Newlines
+    text = text.replace(/`([^`]+)`/g, '<code class="text-mono" style="background: var(--gc-surface-sunken); border: 1px solid var(--gc-border); padding: 2px 5px; border-radius: var(--gc-squircle-sm); font-size: 12px; color: var(--gc-accent);">$1</code>');
     text = text.replace(/\n/g, '<br/>');
     return text;
   };
 
   const renderMessageContent = (content: string) => {
-    let cleanContent = content;
-    if (cleanContent.startsWith('[System Directive:')) {
-      cleanContent = cleanContent.replace(/^\[System Directive:[^\]]+\]\n\n/, '');
-    }
-
-    const blocks = cleanContent.split('```');
+    const blocks = content.split('```');
     return blocks.map((block, i) => {
       if (i % 2 === 1) {
         const firstLineEnd = block.indexOf('\n');
@@ -281,7 +293,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
         }
         return <CodeBlock key={i} code={code.replace(/\r\n/g, '\n').trimEnd()} language={lang} />;
       }
-      
+
       return (
         <span key={i} dangerouslySetInnerHTML={{ __html: formatMarkdownText(block) }} />
       );
@@ -305,7 +317,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 pr-3 border-r border-[var(--gc-border)]">
             <Logo size={22} className="text-accent" />
-            <span className="font-bold text-sm tracking-tight text-[var(--gc-text)] hidden md:inline">GhostCompute</span>
+            <span className="font-bold text-sm tracking-tight text-[var(--gc-text)] hidden md:inline">Vant</span>
           </div>
 
           <div className="flex flex-col">
@@ -407,18 +419,36 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
             </button>
           )}
           
-          <div className="w-[140px] sm:w-[170px]">
-            <CustomSelect
-              value={selectedModel}
-              onChange={val => setSelectedModel(val)}
-              disabled={!isConnected || remoteModels.length === 0}
-              placeholder={remoteModels.length === 0 ? "No models" : "Select model"}
-              options={remoteModels.map(m => ({
-                value: m,
-                label: m,
-                description: 'Host GPU Model'
-              }))}
-            />
+          <div className="flex items-center gap-1">
+            <div className="w-[140px] sm:w-[170px]">
+              <CustomSelect
+                value={selectedModel}
+                onChange={val => setSelectedModel(val)}
+                disabled={!isConnected || remoteModels.length === 0}
+                placeholder={remoteModels.length === 0 ? "No models" : "Select model"}
+                options={remoteModels.map(m => ({
+                  value: m,
+                  label: m,
+                  description: 'Host GPU Model'
+                }))}
+              />
+            </div>
+            {isConnected && (
+              <button
+                onClick={() => refreshModels()}
+                disabled={isRefreshingModels}
+                className="btn btn-ghost"
+                style={{ width: '30px', height: '30px', padding: 0, borderRadius: 'var(--gc-radius-md)' }}
+                title="Refresh host models"
+                aria-label="Refresh host models"
+              >
+                <Icon
+                  name="refresh"
+                  size={15}
+                  className={isRefreshingModels ? 'animate-spin text-accent' : 'text-muted'}
+                />
+              </button>
+            )}
           </div>
 
           <ThemeToggle size="sm" />
@@ -480,17 +510,62 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                     <Icon name="auto_awesome" size={26} />
                   </div>
                   <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '6px' }}>Remote Compute Terminal</h3>
-                  <p className="text-muted" style={{ fontSize: '13px', maxWidth: '440px', lineHeight: 1.5, marginBottom: 'var(--gc-space-lg)' }}>
+                  <p className="text-muted" style={{ fontSize: '13px', maxWidth: '460px', lineHeight: 1.5, marginBottom: 'var(--gc-space-lg)' }}>
                     {isConnected 
                       ? `Connected to host node via encrypted Noise tunnel. Model: ${selectedModel || 'Default'}. Select a prompt starter below or enter a prompt.`
-                      : 'Not connected to a host node. Pair with your host gaming laptop over local Wi-Fi or Cloudflare Quick Tunnel to access remote GPU compute.'}
+                      : 'Not connected to a host node. Pair with your host GPU laptop over local Wi-Fi or Cloudflare Quick Tunnel to access remote inference.'}
                   </p>
 
                   {!isConnected ? (
-                    <Button onClick={() => setActiveTab('pairing')} className="flex items-center gap-xs">
-                      <Icon name="sensors" size={14} />
-                      <span>Connect to Host Laptop</span>
-                    </Button>
+                    <div className="flex flex-col items-center gap-md w-full max-w-md">
+                      {discoveredPeers.length > 0 && (
+                        <div className="w-full flex flex-col gap-xs text-left">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted px-1">
+                            Nearby Hosts on LAN
+                          </div>
+                          {discoveredPeers.map((peer) => (
+                            <div
+                              key={peer.peer_id}
+                              className="flex items-center justify-between gap-sm px-3.5 py-2.5 rounded-xl border transition-colors"
+                              style={{
+                                background: 'var(--gc-surface-elevated)',
+                                borderColor: 'var(--gc-border)',
+                              }}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <StatusDot status="idle" />
+                                <div className="min-w-0">
+                                  <div className="text-[13px] font-medium truncate text-[var(--gc-text)]">
+                                    {peer.device_name}
+                                  </div>
+                                  <div className="text-[11px] font-mono text-muted truncate">
+                                    {peer.addresses[0] || peer.peer_id.slice(0, 12)}:{peer.port}
+                                  </div>
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    await connectToHost(peer.peer_id);
+                                    toast.success('Connected to host', peer.device_name);
+                                  } catch (err: any) {
+                                    toast.error('Connection failed', err?.message || String(err));
+                                  }
+                                }}
+                              >
+                                <Icon name="bolt" size={13} />
+                                <span>Connect</span>
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <Button onClick={() => setActiveTab('pairing')} className="flex items-center gap-xs">
+                        <Icon name="sensors" size={14} />
+                        <span>{discoveredPeers.length > 0 ? 'Open Pairing & Tunnel Manager' : 'Connect to Host Laptop'}</span>
+                      </Button>
+                    </div>
                   ) : (
                     /* Bento Prompt Starters Grid */
                     <div 
@@ -604,6 +679,14 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </>
+                    ) : msg.isError ? (
+                      <>
+                        <Icon name="warning" size={12} className="text-danger" />
+                        <span className="font-medium text-danger">Inference Error</span>
+                        <span className="text-[10px] text-dim font-mono">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </>
                     ) : (
                       <>
                         <Icon name="memory" size={12} className="text-accent" />
@@ -620,7 +703,12 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                       padding: '12px 18px',
                       lineHeight: 1.6,
                       fontSize: '13.5px',
-                      position: 'relative'
+                      position: 'relative',
+                      ...(msg.isError ? {
+                        background: 'var(--gc-danger-muted)',
+                        borderColor: 'rgba(239, 68, 68, 0.35)',
+                        color: 'var(--gc-text)'
+                      } : {})
                     }}
                   >
                     {renderMessageContent(msg.content)}
@@ -748,16 +836,16 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                         border: '1px solid var(--gc-border)',
                         background: 'var(--gc-surface-sunken)'
                       }}
-                      title="Click to copy local OpenAI proxy endpoint (127.0.0.1:11434)"
+                      title={`Click to copy local OpenAI proxy endpoint (127.0.0.1:${proxyPort})`}
                     >
                       <Icon name="public" size={11} />
-                      <span>:11434</span>
+                      <span>:{proxyPort}</span>
                       {copiedProxy && <Icon name="check" size={11} className="text-success" />}
                     </button>
 
                     <Button 
                       onClick={handleSend} 
-                      disabled={!inputVal.trim() || !isConnected}
+                      disabled={!inputVal.trim() || !isConnected || isStreaming}
                       size="sm"
                       className="squircle-sm"
                       style={{ 
@@ -767,7 +855,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                       }}
                     >
                       <Icon name="send" size={13} />
-                      <span>Send</span>
+                      <span>{isStreaming ? 'Streaming...' : 'Send'}</span>
                     </Button>
                   </div>
                 </div>
@@ -918,7 +1006,7 @@ export const ClientTerminal: React.FC<ClientTerminalProps> = ({ onResetRole }) =
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Local Proxy</span>
-                      <span className="text-mono" style={{ fontSize: '11px' }}>:11434</span>
+                      <span className="text-mono" style={{ fontSize: '11px' }}>:{proxyPort}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Round-trip Ping</span>

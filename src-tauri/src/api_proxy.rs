@@ -30,6 +30,7 @@ pub struct ApiProxyStatus {
 
 pub struct ApiProxyHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    service_forwarders: std::collections::HashMap<u16, (u16, oneshot::Sender<()>)>,
     pub status: ApiProxyStatus,
 }
 
@@ -37,6 +38,7 @@ impl ApiProxyHandle {
     pub fn new() -> Self {
         Self {
             shutdown_tx: None,
+            service_forwarders: std::collections::HashMap::new(),
             status: ApiProxyStatus {
                 running: false,
                 port: 0,
@@ -53,7 +55,7 @@ impl ApiProxyHandle {
         settings: Arc<tokio::sync::Mutex<crate::settings::SettingsStore>>,
     ) -> Result<(), String> {
         if self.shutdown_tx.is_some() {
-            return Err("API proxy is already running".to_string());
+            return Ok(());
         }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -75,11 +77,28 @@ impl ApiProxyHandle {
             .layer(cors)
             .with_state(Arc::new(proxy_state));
 
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-            .await
-            .map_err(|e| format!("Failed to bind API proxy to port {}: {}", port, e))?;
+        let candidates = [port, port.saturating_add(1), 8787];
+        let mut bound_listener = None;
+        let mut bound_port = port;
+        let mut last_err = String::new();
 
-        log::info!("Transparent HTTP proxy started on http://127.0.0.1:{}", port);
+        for cand in candidates {
+            match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", cand)).await {
+                Ok(l) => {
+                    bound_listener = Some(l);
+                    bound_port = cand;
+                    break;
+                }
+                Err(e) => {
+                    last_err = format!("Port {}: {}", cand, e);
+                }
+            }
+        }
+
+        let listener = bound_listener
+            .ok_or_else(|| format!("Failed to bind API proxy ({})", last_err))?;
+
+        log::info!("Transparent HTTP proxy started on http://127.0.0.1:{}", bound_port);
 
         tokio::spawn(async move {
             let graceful = axum::serve(listener, app).with_graceful_shutdown(async move {
@@ -93,15 +112,81 @@ impl ApiProxyHandle {
         self.shutdown_tx = Some(shutdown_tx);
         self.status = ApiProxyStatus {
             running: true,
-            port,
-            endpoint: format!("http://127.0.0.1:{}", port),
+            port: bound_port,
+            endpoint: format!("http://127.0.0.1:{}", bound_port),
         };
 
         Ok(())
     }
 
+    pub async fn ensure_service_forwarder(
+        &mut self,
+        remote_port: u16,
+        p2p_client: Arc<tokio::sync::Mutex<ClientConnection>>,
+    ) -> Result<u16, String> {
+        if let Some((local_port, _)) = self.service_forwarders.get(&remote_port) {
+            return Ok(*local_port);
+        }
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+
+        let client_arc = p2p_client.clone();
+        let app = Router::new()
+            .route(
+                "/",
+                any(move |req: Request| {
+                    let c = client_arc.clone();
+                    async move { forward_service_http(c, remote_port, "/", req).await }
+                }),
+            )
+            .route(
+                "/*path",
+                any(move |Path(p): Path<String>, req: Request| {
+                    let c = p2p_client.clone();
+                    async move {
+                        let full = format!("/{}", p);
+                        forward_service_http(c, remote_port, &full, req).await
+                    }
+                }),
+            )
+            .layer(cors);
+
+        let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", remote_port)).await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| format!("Failed to bind service tunnel port: {}", e))?,
+        };
+
+        let local_port = listener.local_addr().map(|a| a.port()).unwrap_or(remote_port);
+
+        tokio::spawn(async move {
+            let graceful = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            });
+            if let Err(e) = graceful.await {
+                log::error!("Service forwarder error (port {}): {}", remote_port, e);
+            }
+        });
+
+        self.service_forwarders.insert(remote_port, (local_port, shutdown_tx));
+        log::info!(
+            "Service tunnel forwarder active: http://127.0.0.1:{} -> host:{}",
+            local_port,
+            remote_port
+        );
+        Ok(local_port)
+    }
+
     pub async fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        for (_, (_, tx)) in self.service_forwarders.drain() {
             let _ = tx.send(());
         }
         self.status = ApiProxyStatus {
@@ -200,6 +285,7 @@ async fn handle_proxy_request(
         path: path.to_string(),
         headers: headers.clone(),
         body_base64: body_base64.clone(),
+        target_port: None,
     };
 
     let settings = state.settings.lock().await.get();
@@ -526,5 +612,142 @@ async fn handle_proxy_request(
     let stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
     let body = Body::from_stream(stream);
     
+    (status_code, response_headers, body).into_response()
+}
+
+async fn forward_service_http(
+    p2p_client: Arc<tokio::sync::Mutex<ClientConnection>>,
+    remote_port: u16,
+    path: &str,
+    req: Request,
+) -> axum::response::Response {
+    let method = req.method().to_string();
+    let full_path = if let Some(q) = req.uri().query() {
+        format!("{}?{}", path, q)
+    } else {
+        path.to_string()
+    };
+
+    let mut headers = Vec::new();
+    for (name, value) in req.headers().iter() {
+        if let Ok(v) = value.to_str() {
+            headers.push((name.to_string(), v.to_string()));
+        }
+    }
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 25 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid request body: {}", e)).into_response();
+        }
+    };
+
+    let body_base64 = if !body_bytes.is_empty() {
+        Some(BASE64.encode(body_bytes))
+    } else {
+        None
+    };
+
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let proxy_req = HttpProxyRequest {
+        action: "http_proxy".to_string(),
+        req_id: req_id.clone(),
+        method,
+        path: full_path,
+        headers,
+        body_base64,
+        target_port: Some(remote_port),
+    };
+
+    let rx = {
+        let mut client = p2p_client.lock().await;
+        match client.proxy_http_request(proxy_req).await {
+            Ok(rx) => rx,
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Tunnel disconnected or host unreachable: {}", e),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let mut rx = rx;
+    let first_chunk_val = match rx.recv().await {
+        Some(val) => val,
+        None => {
+            p2p_client.lock().await.remove_proxy_router(&req_id).await;
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Host service on port {} did not respond.", remote_port),
+            )
+                .into_response();
+        }
+    };
+
+    let first_chunk: HttpProxyResponseChunk = match serde_json::from_value(first_chunk_val) {
+        Ok(c) => c,
+        Err(_) => {
+            p2p_client.lock().await.remove_proxy_router(&req_id).await;
+            return (StatusCode::BAD_GATEWAY, "Malformed response from host service").into_response();
+        }
+    };
+
+    let status_code = StatusCode::from_u16(first_chunk.status_code.unwrap_or(200)).unwrap_or(StatusCode::OK);
+    let mut response_headers = HeaderMap::new();
+    if let Some(hdrs) = first_chunk.headers {
+        for (k, v) in hdrs {
+            let kl = k.to_lowercase();
+            if kl == "transfer-encoding" || kl == "content-length" {
+                continue;
+            }
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_bytes(v.as_bytes()),
+            ) {
+                response_headers.insert(name, val);
+            }
+        }
+    }
+
+    let (tx, body_rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(100);
+    if let Some(b64) = first_chunk.data_base64 {
+        if let Ok(bytes) = BASE64.decode(b64) {
+            if !bytes.is_empty() {
+                let _ = tx.send(Ok(bytes.into())).await;
+            }
+        }
+    }
+
+    let client_clone = p2p_client.clone();
+    let req_id_clone = req_id.clone();
+
+    if !first_chunk.done {
+        tokio::spawn(async move {
+            while let Some(chunk_val) = rx.recv().await {
+                if let Ok(chunk) = serde_json::from_value::<HttpProxyResponseChunk>(chunk_val) {
+                    if let Some(b64) = chunk.data_base64 {
+                        if let Ok(bytes) = BASE64.decode(b64) {
+                            if !bytes.is_empty() && tx.send(Ok(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    if chunk.done {
+                        break;
+                    }
+                }
+            }
+            client_clone.lock().await.remove_proxy_router(&req_id_clone).await;
+        });
+    } else {
+        tokio::spawn(async move {
+            client_clone.lock().await.remove_proxy_router(&req_id_clone).await;
+        });
+    }
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
+    let body = Body::from_stream(stream);
     (status_code, response_headers, body).into_response()
 }

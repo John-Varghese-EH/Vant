@@ -276,10 +276,20 @@ impl OllamaManager {
             .send()
             .await?;
 
+        if !res.status().is_success() {
+            let status = res.status();
+            let err_body = res.text().await.unwrap_or_default();
+            return Err(OllamaError::ParseError(format!(
+                "Ollama pull failed ({}): {}",
+                status, err_body
+            )));
+        }
+
         let (tx, rx) = mpsc::channel(100);
 
         tokio::spawn(async move {
             let mut buffer = String::new();
+            let mut saw_success = false;
             while let Ok(Some(chunk)) = res.chunk().await {
                 if let Ok(text) = std::str::from_utf8(&chunk) {
                     buffer.push_str(text);
@@ -289,13 +299,37 @@ impl OllamaManager {
                         if line.trim().is_empty() {
                             continue;
                         }
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                            if let Some(err_msg) = val.get("error").and_then(|e| e.as_str()) {
+                                let _ = tx
+                                    .send(PullProgress {
+                                        status: format!("error: {}", err_msg),
+                                        total: None,
+                                        completed: None,
+                                    })
+                                    .await;
+                                return;
+                            }
+                        }
                         if let Ok(progress) = serde_json::from_str::<PullProgress>(&line) {
+                            if progress.status == "success" {
+                                saw_success = true;
+                            }
                             if tx.send(progress).await.is_err() {
                                 return;
                             }
                         }
                     }
                 }
+            }
+            if !saw_success {
+                let _ = tx
+                    .send(PullProgress {
+                        status: "success".to_string(),
+                        total: None,
+                        completed: None,
+                    })
+                    .await;
             }
         });
 

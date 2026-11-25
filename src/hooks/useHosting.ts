@@ -13,6 +13,7 @@ import {
 export function useHosting() {
   const [isHosting, setIsHosting] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [hostingError, setHostingError] = useState<string | null>(null);
 
   useEffect(() => {
     invokeIsHosting().then(running => {
@@ -51,15 +52,20 @@ export function useHosting() {
   }, [isHosting]);
 
   const startHosting = useCallback(async () => {
+    setHostingError(null);
     try {
       await invokeStartHosting();
       setIsHosting(true);
-    } catch (err) {
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || 'Failed to start Host Server';
       console.error('Failed to start hosting:', err);
+      setHostingError(msg);
+      throw err;
     }
   }, []);
 
   const stopHosting = useCallback(async () => {
+    setHostingError(null);
     try {
       await invokeStopHosting();
       setIsHosting(false);
@@ -89,6 +95,7 @@ export function useHosting() {
   return {
     isHosting,
     sessions,
+    hostingError,
     startHosting,
     stopHosting,
     killSession,

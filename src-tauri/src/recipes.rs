@@ -66,7 +66,7 @@ pub struct EnvVar {
 /// A volume mount
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VolumeMount {
-    pub host_path: String,  // relative to ghostcompute data dir
+    pub host_path: String,  // relative to vant data dir
     pub container_path: String,
     pub description: String,
 }
@@ -260,7 +260,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: ghostcompute-open-webui
+    container_name: vant-open-webui
     ports:
       - "3000:8080"
     environment:
@@ -311,7 +311,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   anythingllm:
     image: mintplexlabs/anythingllm:latest
-    container_name: ghostcompute-anythingllm
+    container_name: vant-anythingllm
     ports:
       - "3001:3001"
     environment:
@@ -363,7 +363,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   comfyui:
     image: ghcr.io/ai-dock/comfyui:latest
-    container_name: ghostcompute-comfyui
+    container_name: vant-comfyui
     ports:
       - "8188:8188"
     volumes:
@@ -414,7 +414,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest-gpu
-    container_name: ghostcompute-whisper
+    container_name: vant-whisper
     ports:
       - "9000:9000"
     environment:
@@ -466,7 +466,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   n8n:
     image: n8nio/n8n:latest
-    container_name: ghostcompute-n8n
+    container_name: vant-n8n
     ports:
       - "5678:5678"
     environment:
@@ -500,18 +500,18 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   dify-api:
     image: langgenius/dify-api:latest
-    container_name: ghostcompute-dify-api
+    container_name: vant-dify-api
     ports:
       - "5001:5001"
     environment:
       - MODE=api
-      - SECRET_KEY=ghostcompute-dify-secret
+      - SECRET_KEY=vant-dify-secret
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
   dify-web:
     image: langgenius/dify-web:latest
-    container_name: ghostcompute-dify-web
+    container_name: vant-dify-web
     ports:
       - "3100:3000"
     environment:
@@ -543,7 +543,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   activepieces:
     image: activepieces/activepieces:latest
-    container_name: ghostcompute-activepieces
+    container_name: vant-activepieces
     ports:
       - "8080:80"
     environment:
@@ -578,7 +578,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   flowise:
     image: flowiseai/flowise:latest
-    container_name: ghostcompute-flowise
+    container_name: vant-flowise
     ports:
       - "3002:3000"
     volumes:
@@ -610,7 +610,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   langflow:
     image: langflowai/langflow:latest
-    container_name: ghostcompute-langflow
+    container_name: vant-langflow
     ports:
       - "7860:7860"
     volumes:
@@ -641,7 +641,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   open-interpreter:
     image: ghcr.io/openinterpreter/open-interpreter:latest
-    container_name: ghostcompute-open-interpreter
+    container_name: vant-open-interpreter
     ports:
       - "8000:8000"
     environment:
@@ -674,7 +674,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   tabby:
     image: tabbyml/tabby:latest
-    container_name: ghostcompute-tabby
+    container_name: vant-tabby
     ports:
       - "8082:8080"
     volumes:
@@ -743,7 +743,7 @@ pub fn build_catalog() -> Vec<ServiceRecipe> {
             compose_template: Some(r#"services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: ghostcompute-qdrant
+    container_name: vant-qdrant
     ports:
       - "6333:6333"
       - "6334:6334"

@@ -1,6 +1,6 @@
 # Setup & Configuration
 
-This guide will walk you through setting up GhostCompute on both the powerful gaming laptop (Host) and your lightweight laptop (Client).
+This guide will walk you through setting up Vant on both the powerful gaming laptop (Host) and your lightweight laptop (Client).
 
 ## Prerequisites
 - Ollama must be installed on the **Host** machine.
@@ -9,7 +9,7 @@ This guide will walk you through setting up GhostCompute on both the powerful ga
 ## 1. Host Setup
 The Host is the machine running the heavy LLM inferences.
 
-1. Launch **GhostCompute**.
+1. Launch **Vant**.
 2. Go to the **Settings** tab.
 3. Under the **Host Settings** section:
    - Ensure the server is listening on an open port.
@@ -21,13 +21,13 @@ The Host is the machine running the heavy LLM inferences.
 ## 2. Client Setup
 The Client is the machine you will use to connect to the Host and use the AI models.
 
-1. Launch **GhostCompute** on your second laptop.
+1. Launch **Vant** on your second laptop.
 2. Go to the **Settings** tab.
 3. Under the **Client Settings** section:
    - Enter the exact same **Room ID** you used on the Host.
 4. Under the **API Proxy Settings** section:
    - Enable the API Proxy (Default: Port 11434).
-   - This makes GhostCompute act like a local Ollama instance on your client machine!
+   - This makes Vant act like a local Ollama instance on your client machine!
 5. (Optional) **Cloud Fallback Configuration**:
    - Scroll down to the **Cloud Fallback API Keys** section.
    - Enter your Gemini and/or Groq API keys.

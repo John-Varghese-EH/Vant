@@ -1,12 +1,12 @@
 # Programmatic API Access
 
-Since GhostCompute functions as a transparent Layer 7 HTTP multiplexer, any custom script, curl command, or application that can speak HTTP can communicate with your remote host. 
+Since Vant functions as a transparent Layer 7 HTTP multiplexer, any custom script, curl command, or application that can speak HTTP can communicate with your remote host. 
 
-GhostCompute does not alter the requests - it only encapsulates them. This means you have 100% API compatibility with the underlying server (e.g., Ollama).
+Vant does not alter the requests - it only encapsulates them. This means you have 100% API compatibility with the underlying server (e.g., Ollama).
 
 ## Basic cURL Examples
 
-Assuming GhostCompute is paired and running its local proxy on `127.0.0.1:11434` on your Client.
+Assuming Vant is paired and running its local proxy on `127.0.0.1:11434` on your Client.
 
 ### 1. Check Version & Status
 ```bash
@@ -61,7 +61,7 @@ client = Client(host='http://127.0.0.1:11434')
 response = client.chat(model='llama3', messages=[
   {
     'role': 'user',
-    'content': 'Hello from GhostCompute!',
+    'content': 'Hello from Vant!',
   },
 ])
 print(response['message']['content'])

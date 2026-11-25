@@ -7,13 +7,18 @@ import {
   stopService,
   refreshServiceStatus,
   getServiceLogs,
+  getDockerStatus,
+  detectGpuHardware,
   ServiceRecipe,
   ServiceState,
+  DockerStatus,
+  GpuInfo,
   ToolCategory
 } from '../lib/tauri';
 import { Badge } from './common/Badge';
 import { Button } from './common/Button';
 import { IconBadge } from './common/IconBadge';
+import { useToast } from './common/Toast';
 
 const getToolIconMeta = (recipeId: string, _category?: ToolCategory) => {
   switch (recipeId) {
@@ -64,8 +69,11 @@ const CATEGORIES: { id: ToolCategory | 'all'; label: string }[] = [
 ];
 
 export const AppStoreCatalog: React.FC = () => {
+  const toast = useToast();
   const [recipes, setRecipes] = useState<ServiceRecipe[]>([]);
   const [states, setStates] = useState<Record<string, ServiceState>>({});
+  const [dockerStatus, setDockerStatus] = useState<DockerStatus | null>(null);
+  const [gpuInfo, setGpuInfo] = useState<GpuInfo | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<ToolCategory | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -73,13 +81,22 @@ export const AppStoreCatalog: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [r, s] = await Promise.all([listRecipes(), getServiceStates()]);
-      setRecipes(r);
-      const stateMap: Record<string, ServiceState> = {};
-      s.forEach(item => {
-        stateMap[item.recipe_id] = item;
-      });
-      setStates(stateMap);
+      const [r, s, d, g] = await Promise.all([
+        listRecipes(),
+        getServiceStates(),
+        getDockerStatus().catch(() => null),
+        detectGpuHardware().catch(() => null),
+      ]);
+      if (Array.isArray(r)) setRecipes(r);
+      if (Array.isArray(s)) {
+        const stateMap: Record<string, ServiceState> = {};
+        s.forEach(item => {
+          stateMap[item.recipe_id] = item;
+        });
+        setStates(stateMap);
+      }
+      if (d) setDockerStatus(d);
+      if (g) setGpuInfo(g);
     } catch (e) {
       console.error('Failed to load catalog data:', e);
     }
@@ -87,31 +104,43 @@ export const AppStoreCatalog: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 4000);
+    const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  const handleInstallAndRun = async (recipeId: string) => {
-    setLoadingAction(recipeId);
+  const handleInstallAndRun = async (recipe: ServiceRecipe) => {
+    if (recipe.deployment !== 'native_binary' && dockerStatus && !dockerStatus.running) {
+      toast.warning(
+        'Docker Daemon Required',
+        `${recipe.name} runs inside an isolated container. Start Docker Desktop / Docker Engine first, then click Launch.`
+      );
+      return;
+    }
+
+    setLoadingAction(recipe.id);
     try {
-      await installAndRunService(recipeId);
-      await refreshServiceStatus(recipeId);
+      await installAndRunService(recipe.id);
+      await refreshServiceStatus(recipe.id);
       await loadData();
-    } catch (e) {
-      alert(`Failed to launch tool: ${e}`);
+      toast.success(`${recipe.name} Started`, `Running cleanly on port :${recipe.ports[0]?.host_port || 'auto'}`);
+    } catch (e: any) {
+      toast.error(`Failed to launch ${recipe.name}`, typeof e === 'string' ? e : e?.message || 'Execution error');
+      await refreshServiceStatus(recipe.id).catch(() => {});
+      await loadData();
     } finally {
       setLoadingAction(null);
     }
   };
 
-  const handleStop = async (recipeId: string) => {
-    setLoadingAction(recipeId);
+  const handleStop = async (recipe: ServiceRecipe) => {
+    setLoadingAction(recipe.id);
     try {
-      await stopService(recipeId);
-      await refreshServiceStatus(recipeId);
+      await stopService(recipe.id);
+      await refreshServiceStatus(recipe.id);
       await loadData();
-    } catch (e) {
-      alert(`Failed to stop tool: ${e}`);
+      toast.info(`${recipe.name} Stopped`, 'Container or service cleanly halted.');
+    } catch (e: any) {
+      toast.error(`Failed to stop ${recipe.name}`, typeof e === 'string' ? e : e?.message || 'Stop failed');
     } finally {
       setLoadingAction(null);
     }
@@ -125,15 +154,16 @@ export const AppStoreCatalog: React.FC = () => {
         name: recipe.name,
         content: logs || 'No logs recorded yet.',
       });
-    } catch (e) {
-      alert(`Failed to fetch logs: ${e}`);
+    } catch (e: any) {
+      toast.error('Unable to fetch logs', typeof e === 'string' ? e : e?.message || 'Log retrieval failed');
     }
   };
 
   const filteredRecipes = useMemo(() => {
     return recipes.filter(r => {
       const matchesCat = selectedCategory === 'all' || r.category === selectedCategory;
-      const matchesSearch = searchQuery === '' || 
+      const matchesSearch =
+        searchQuery === '' ||
         r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         r.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
         r.id.toLowerCase().includes(searchQuery.toLowerCase());
@@ -143,16 +173,15 @@ export const AppStoreCatalog: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 animate-fade-in">
-      
       {/* Header Bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-[var(--gc-border)]">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-xl font-bold tracking-tight text-[var(--gc-text)] flex items-center gap-2">
-              <span>One-Click App Store</span>
+              <span>One-Click AI App Store</span>
             </h2>
-            <span 
-              className="text-[10px] font-mono px-2.5 py-0.5 rounded-[var(--gc-squircle-badge)] bg-violet-500/20 text-violet-400 border border-violet-500/30 uppercase tracking-widest font-semibold whitespace-nowrap shrink-0"
+            <span
+              className="text-[10px] font-mono px-2.5 py-0.5 rounded-[var(--gc-squircle-badge)] bg-violet-500/20 text-accent border border-violet-500/30 uppercase tracking-widest font-semibold whitespace-nowrap shrink-0"
               style={{ borderRadius: 'var(--gc-squircle-badge)' }}
             >
               16 Verified Recipes
@@ -169,16 +198,16 @@ export const AppStoreCatalog: React.FC = () => {
             <Icon name="search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--gc-text-muted)]" />
             <input
               type="text"
-              placeholder="Search tools & models..."
+              placeholder="Search tools & engines..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] text-[var(--gc-text)] placeholder:text-[var(--gc-text-muted)] focus:outline-none focus:border-violet-500 transition-colors"
             />
           </div>
-          <Button 
-            size="sm" 
-            variant="ghost" 
-            onClick={loadData} 
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={loadData}
             className="flex items-center gap-1.5 text-xs text-[var(--gc-text-muted)] hover:text-[var(--gc-text)] shrink-0"
           >
             <Icon name="refresh" size={13} />
@@ -187,7 +216,63 @@ export const AppStoreCatalog: React.FC = () => {
         </div>
       </div>
 
-      {/* Category Pills (Fluid Segmented Control with G2/G3 Curvature) */}
+      {/* Live Environment Readiness Strip (Docker + GPU Hardware) */}
+      {(dockerStatus || gpuInfo) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {dockerStatus && (
+            <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-[var(--gc-surface)] border border-[var(--gc-border)]">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                    dockerStatus.running
+                      ? 'bg-emerald-500/15 text-emerald-500'
+                      : 'bg-amber-500/15 text-amber-500'
+                  }`}
+                >
+                  <Icon name="widgets" size={15} />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-[var(--gc-text)]">Docker Container Engine</div>
+                  <div className="text-[11px] text-[var(--gc-text-muted)]">
+                    {dockerStatus.running
+                      ? `Running (v${dockerStatus.version || 'ready'})`
+                      : dockerStatus.installed
+                      ? 'Installed but paused - start Docker for container apps'
+                      : 'Not installed (Bare-metal apps like Ollama still work)'}
+                  </div>
+                </div>
+              </div>
+              <Badge variant={dockerStatus.running ? 'success' : 'warning'}>
+                {dockerStatus.running ? 'Ready' : dockerStatus.installed ? 'Stopped' : 'Missing'}
+              </Badge>
+            </div>
+          )}
+
+          {gpuInfo && (
+            <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-[var(--gc-surface)] border border-[var(--gc-border)]">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-violet-500/15 text-accent flex items-center justify-center shrink-0">
+                  <Icon name="memory" size={15} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-[var(--gc-text)] truncate">{gpuInfo.name}</div>
+                  <div className="text-[11px] text-[var(--gc-text-muted)] truncate">
+                    {gpuInfo.vram_mb > 0
+                      ? `${(gpuInfo.vram_mb / 1024).toFixed(1)} GB VRAM · ${gpuInfo.vendor.toUpperCase()}`
+                      : 'Unified / CPU execution mode'}
+                    {gpuInfo.nvidia_docker ? ' · NVIDIA Docker Ready' : ''}
+                  </div>
+                </div>
+              </div>
+              <Badge variant={gpuInfo.vendor !== 'none' ? 'info' : 'neutral'}>
+                {gpuInfo.vendor !== 'none' ? gpuInfo.vendor.toUpperCase() : 'CPU'}
+              </Badge>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Category Pills */}
       <div className="flex flex-wrap items-center gap-1.5 bg-[var(--gc-surface-sunken)] p-1.5 rounded-2xl border border-[var(--gc-border)] w-fit">
         {CATEGORIES.map(cat => (
           <button
@@ -204,7 +289,7 @@ export const AppStoreCatalog: React.FC = () => {
         ))}
       </div>
 
-      {/* Grid of Tools (Double-Bezel Architecture with G2 Continuous Curvature) */}
+      {/* Grid of Tools */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredRecipes.map(recipe => {
           const state = states[recipe.id];
@@ -219,23 +304,24 @@ export const AppStoreCatalog: React.FC = () => {
             <div
               key={recipe.id}
               className={`double-bezel group transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 ${
-                isRunning ? 'border-violet-500/40 shadow-[0_0_24px_rgba(139,92,246,0.15)]' : 'border-[var(--gc-border)] hover:border-violet-500/30'
+                isRunning
+                  ? 'border-violet-500/40 shadow-[0_0_24px_rgba(139,92,246,0.15)]'
+                  : 'border-[var(--gc-border)] hover:border-violet-500/30'
               }`}
             >
               <div className="double-bezel-inner h-full flex flex-col justify-between p-4.5 bg-[var(--gc-surface)]">
-                
                 <div>
-                  {/* Card Header: Icon, Name, Badge */}
+                  {/* Card Header */}
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
                       {(() => {
                         const meta = getToolIconMeta(recipe.id, recipe.category);
                         return (
-                          <IconBadge 
-                            icon={meta.icon} 
-                            variant={meta.variant} 
-                            size="md" 
-                            glow={isRunning} 
+                          <IconBadge
+                            icon={meta.icon}
+                            variant={meta.variant}
+                            size="md"
+                            glow={isRunning}
                             className="group-hover:scale-105"
                           />
                         );
@@ -247,7 +333,10 @@ export const AppStoreCatalog: React.FC = () => {
                         <div className="text-[11px] text-[var(--gc-text-muted)] font-mono mt-0.5 capitalize flex items-center gap-1.5">
                           <span>{recipe.deployment.replace('_', ' ')}</span>
                           {recipe.deployment === 'native_binary' && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-[var(--gc-radius-squircle-sm)] bg-violet-500/20 text-violet-400 border border-violet-500/30 uppercase font-semibold whitespace-nowrap shrink-0">
+                            <span
+                              className="text-[9px] px-1.5 py-0.5 rounded-[var(--gc-squircle-sm)] bg-violet-500/20 text-accent border border-violet-500/30 uppercase font-semibold whitespace-nowrap shrink-0"
+                              style={{ borderRadius: 'var(--gc-squircle-sm)' }}
+                            >
                               Bare Metal
                             </span>
                           )}
@@ -269,7 +358,13 @@ export const AppStoreCatalog: React.FC = () => {
                     {recipe.description}
                   </p>
 
-                  {/* Badges / Hardware Specs */}
+                  {isError && state?.error_message && (
+                    <div className="mt-2.5 p-2 rounded-lg bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-400 line-clamp-2">
+                      {state.error_message}
+                    </div>
+                  )}
+
+                  {/* Specs */}
                   <div className="flex flex-wrap items-center gap-1.5 mt-3 text-[10px] text-[var(--gc-text-muted)] font-mono">
                     {primaryPort && (
                       <span className="px-2 py-0.5 rounded-md bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] text-[var(--gc-text)]">
@@ -289,7 +384,7 @@ export const AppStoreCatalog: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Bottom Actions: Logs, External Link & Launch/Stop */}
+                {/* Bottom Actions */}
                 <div className="flex items-center justify-between gap-2 mt-4 pt-3.5 border-t border-[var(--gc-border)]">
                   <div className="flex items-center gap-1">
                     <button
@@ -317,7 +412,7 @@ export const AppStoreCatalog: React.FC = () => {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() => handleStop(recipe.id)}
+                        onClick={() => handleStop(recipe)}
                         disabled={isLoading}
                         className="flex items-center gap-1.5 text-xs px-3.5 py-1.5 rounded-lg active:scale-[0.98]"
                       >
@@ -328,9 +423,9 @@ export const AppStoreCatalog: React.FC = () => {
                       <Button
                         size="sm"
                         variant="primary"
-                        onClick={() => handleInstallAndRun(recipe.id)}
+                        onClick={() => handleInstallAndRun(recipe)}
                         disabled={isLoading}
-                        className="flex items-center gap-1.5 text-xs px-3.5 py-1.5 rounded-lg active:scale-[0.98] bg-violet-600 hover:bg-violet-500 shadow-sm"
+                        className="flex items-center gap-1.5 text-xs px-3.5 py-1.5 rounded-lg active:scale-[0.98]"
                       >
                         {isLoading ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="play_arrow" size={12} />}
                         Launch
@@ -338,7 +433,6 @@ export const AppStoreCatalog: React.FC = () => {
                     )}
                   </div>
                 </div>
-
               </div>
             </div>
           );
@@ -349,8 +443,11 @@ export const AppStoreCatalog: React.FC = () => {
         <div className="double-bezel">
           <div className="double-bezel-inner py-16 text-center text-muted">
             <p className="text-sm">No tools matching your search criteria.</p>
-            <button 
-              onClick={() => { setSelectedCategory('all'); setSearchQuery(''); }}
+            <button
+              onClick={() => {
+                setSelectedCategory('all');
+                setSearchQuery('');
+              }}
               className="mt-3 text-xs text-accent underline cursor-pointer"
             >
               Clear filters
@@ -361,21 +458,21 @@ export const AppStoreCatalog: React.FC = () => {
 
       {/* Logs Drawer Modal */}
       {selectedLogs && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in">
           <div className="double-bezel w-full max-w-3xl h-[600px] shadow-2xl">
-            <div className="double-bezel-inner h-full flex flex-col p-0 overflow-hidden bg-black">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-white/5">
+            <div className="double-bezel-inner h-full flex flex-col p-0 overflow-hidden bg-[var(--gc-surface)]">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--gc-border)]">
                 <div className="flex items-center gap-2">
-                  <Icon name="terminal" size={18} className="text-violet-400" />
-                  <h3 className="font-semibold text-white text-sm">
-                    Console Logs: <span className="text-violet-300 font-mono">{selectedLogs.name}</span>
+                  <Icon name="terminal" size={18} className="text-accent" />
+                  <h3 className="font-semibold text-[var(--gc-text)] text-sm">
+                    Console Logs: <span className="text-accent font-mono">{selectedLogs.name}</span>
                   </h3>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setSelectedLogs(null)}>
                   Close
                 </Button>
               </div>
-              <div className="flex-1 p-5 overflow-y-auto font-mono text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed select-text bg-[#07070b]">
+              <div className="flex-1 p-5 overflow-y-auto font-mono text-xs text-[var(--gc-text)] whitespace-pre-wrap leading-relaxed select-text bg-[var(--gc-surface-sunken)]">
                 {selectedLogs.content}
               </div>
             </div>

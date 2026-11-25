@@ -454,7 +454,7 @@ async fn start_hosting(
     }
     if let Some(mdns) = mdns_lock.as_mut() {
         let dev_name = crate::identity::NodeIdentity::device_name();
-        let display_name = format!("GhostCompute ({})", dev_name);
+        let display_name = format!("Vant ({})", dev_name);
         if let Err(e) = mdns.start_advertising(state.identity.peer_id().as_str(), &display_name, port) {
             log::warn!("[mDNS] Failed to start advertising service on LAN: {}", e);
         } else {
@@ -494,8 +494,20 @@ async fn stop_hosting(state: tauri::State<'_, AppState>, app_handle: tauri::AppH
 async fn get_active_sessions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let server = state.server.lock().await;
-    Ok(server.get_sessions())
+    let mut sessions = {
+        let server = state.server.lock().await;
+        server.get_sessions()
+    };
+    let store = state.peer_store.lock().await;
+    for session in &mut sessions {
+        if let Ok(Some(peer)) = store.get_peer(&session.peer_id) {
+            session.nickname = peer.nickname;
+            if !peer.device_name.is_empty() {
+                session.device_name = peer.device_name;
+            }
+        }
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -527,6 +539,22 @@ async fn start_quick_tunnel(
     let settings = state.settings.lock().await.get();
     server.spawn_tunnel(settings.host_port, None, &app_handle).await?;
     Ok("Quick tunnel starting".to_string())
+}
+
+#[tauri::command]
+async fn stop_quick_tunnel(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    {
+        let mut server = state.server.lock().await;
+        server.stop_tunnel().await;
+    }
+    let mut tun = state.active_tunnel_url.lock().await;
+    *tun = None;
+    let _ = app_handle.emit("tunnel-url-cleared", ());
+    let _ = app_handle.emit("tunnel-url-ready", "");
+    Ok(())
 }
 
 // -- Client commands --
@@ -689,31 +717,66 @@ async fn send_chat_message(
     state: tauri::State<'_, AppState>,
     message: String,
     model: Option<String>,
+    messages: Option<Vec<serde_json::Value>>,
+    system_prompt: Option<String>,
+    temperature: Option<f32>,
 ) -> Result<(), String> {
-    let mut msg = message;
     let settings = state.settings.lock().await.get();
 
-    if settings.strip_credentials {
-        msg = crate::masker::mask_credentials(&msg);
-    }
-    if settings.compression_enabled {
-        msg = crate::compression::lite_compress(&msg);
-    }
+    let sanitize = |mut text: String| -> String {
+        if settings.strip_credentials {
+            text = crate::masker::mask_credentials(&text);
+        }
+        if settings.compression_enabled {
+            text = crate::compression::lite_compress(&text);
+        }
+        text
+    };
 
-    let payload = serde_json::to_vec(&serde_json::json!({
+    let msg = sanitize(message);
+    let processed_history = messages.map(|hist| {
+        hist.into_iter()
+            .filter_map(|mut item| {
+                let role = item.get("role")?.as_str()?.to_string();
+                let content = item.get("content")?.as_str()?.to_string();
+                let clean = if role == "user" { sanitize(content) } else { content };
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("content".to_string(), serde_json::json!(clean));
+                }
+                Some(item)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let mut payload_obj = serde_json::json!({
         "action": "chat",
         "message": msg,
         "model": model,
-    }))
-    .map_err(|e| format!("{}", e))?;
+    });
+    if let Some(hist) = processed_history {
+        payload_obj["messages"] = serde_json::Value::Array(hist);
+    }
+    if let Some(sys) = system_prompt {
+        payload_obj["system_prompt"] = serde_json::json!(sys);
+    }
+    if let Some(temp) = temperature {
+        payload_obj["temperature"] = serde_json::json!(temp);
+    }
 
-    let mut client = state.client.lock().await;
-    client
-        .send_chat_stream(&payload, app)
+    let payload = serde_json::to_vec(&payload_obj).map_err(|e| format!("{}", e))?;
+
+    let (req_id, rx, routers) = {
+        let mut client = state.client.lock().await;
+        client
+            .prepare_chat_stream(&payload)
+            .await
+            .map_err(|e| format!("{}", e))?
+    };
+
+    // Stream without holding state.client locked so telemetry and status polls stay responsive
+    ClientConnection::stream_chat_chunks(&req_id, rx, routers, app)
         .await
-        .map_err(|e| format!("{}", e))?;
-
-    Ok(())
+        .map_err(|e| format!("{}", e))
 }
 
 #[tauri::command]
@@ -731,14 +794,23 @@ async fn get_remote_models(
 async fn get_host_sys_stats(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let mut client = state.client.lock().await;
-    match client.get_host_sys_stats().await {
-        Ok(stats) => Ok(stats),
-        Err(_) => {
-            let local_stats = crate::sys_monitor::get_system_stats();
-            serde_json::to_value(&local_stats).map_err(|e| e.to_string())
+    let is_connected = {
+        let client = state.client.lock().await;
+        matches!(client.status(), ConnectionStatus::Connected { .. })
+    };
+
+    if is_connected {
+        let mut client = state.client.lock().await;
+        if let Ok(mut stats) = client.get_host_sys_stats().await {
+            if let Some(obj) = stats.as_object_mut() {
+                obj.insert("is_remote".to_string(), serde_json::json!(true));
+            }
+            return Ok(stats);
         }
     }
+
+    let local_stats = crate::sys_monitor::get_system_stats();
+    serde_json::to_value(&local_stats).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -761,6 +833,12 @@ async fn get_available_models(state: tauri::State<'_, AppState>) -> Result<Vec<M
 async fn get_ollama_status(state: tauri::State<'_, AppState>) -> Result<OllamaStatus, String> {
     let ollama = state.ollama.lock().await;
     Ok(ollama.check_status().await)
+}
+
+#[tauri::command]
+async fn start_ollama(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut ollama = state.ollama.lock().await;
+    ollama.ensure_running().await.map_err(|e| format!("{}", e))
 }
 
 #[tauri::command]
@@ -873,6 +951,17 @@ async fn get_api_proxy_status(state: tauri::State<'_, AppState>) -> Result<ApiPr
 }
 
 #[tauri::command]
+async fn ensure_service_tunnel_port(
+    state: tauri::State<'_, AppState>,
+    port: u16,
+) -> Result<u16, String> {
+    let mut proxy = state.api_proxy.lock().await;
+    proxy
+        .ensure_service_forwarder(port, state.client.clone())
+        .await
+}
+
+#[tauri::command]
 fn get_local_ip() -> Result<String, String> {
     use std::net::UdpSocket;
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
@@ -980,6 +1069,18 @@ async fn generate_peer_api_token(
     store.generate_api_token(&peer_id).map_err(|e| format!("{}", e))
 }
 
+#[tauri::command]
+async fn rename_device(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    let store = state.peer_store.lock().await;
+    store
+        .set_nickname(&peer_id, nickname.as_deref())
+        .map_err(|e| format!("{}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -994,7 +1095,11 @@ pub fn run() {
                 .expect("Failed to initialize identity");
 
             // Initialize peer store
-            let db_path = data_dir.join("ghostcompute.db");
+            let db_path = if data_dir.join("vant.db").exists() || !data_dir.join("ghostcompute.db").exists() {
+                data_dir.join("vant.db")
+            } else {
+                data_dir.join("ghostcompute.db")
+            };
             let peer_store = PeerStore::open(&db_path).expect("Failed to open peer database");
 
             // Initialize settings
@@ -1042,7 +1147,7 @@ pub fn run() {
             }
 
             // System tray
-            let show_item = MenuItemBuilder::with_id("show", "Open GhostCompute").build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "Open Vant").build(app)?;
             let kill_item = MenuItemBuilder::with_id("kill_all", "Kill All Sessions").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
@@ -1052,7 +1157,7 @@ pub fn run() {
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("GhostCompute")
+                .tooltip("Vant")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1119,6 +1224,7 @@ pub fn run() {
             kill_all_sessions,
             get_active_tunnel_url,
             start_quick_tunnel,
+            stop_quick_tunnel,
             // Client
             connect_to_host,
             connect_to_url,
@@ -1129,6 +1235,7 @@ pub fn run() {
             get_remote_models,
             // Ollama
             get_ollama_status,
+            start_ollama,
             pull_model,
             swap_model,
             // Identity
@@ -1140,6 +1247,7 @@ pub fn run() {
             start_api_proxy,
             stop_api_proxy,
             get_api_proxy_status,
+            ensure_service_tunnel_port,
             get_host_sys_stats,
             get_local_ip,
             // Docker & GPU
@@ -1156,6 +1264,7 @@ pub fn run() {
             // RBAC
             update_peer_role,
             generate_peer_api_token,
+            rename_device,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run application");

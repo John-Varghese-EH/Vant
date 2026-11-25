@@ -1,18 +1,18 @@
 # Architecture
 
-GhostCompute bridges the gap between a high-performance compute node (Host) and an everyday laptop (Client). Instead of relying on traditional HTTP port forwarding or vulnerable public endpoints, GhostCompute implements a secure Peer-to-Peer (P2P) WebRTC tunnel for raw, encrypted data transmission.
+Vant bridges the gap between a high-performance compute node (Host) and an everyday laptop (Client). Instead of relying on traditional HTTP port forwarding or vulnerable public endpoints, Vant implements a secure Peer-to-Peer (P2P) WebRTC tunnel for raw, encrypted data transmission.
 
 ## High-Level Topology
 
 ```mermaid
 graph LR
-    A[Client App/IDE] -- HTTP --> B[GhostCompute Client Proxy]
-    B -- P2P WebRTC / Matchmaker --> C[GhostCompute Host Server]
+    A[Client App/IDE] -- HTTP --> B[Vant Client Proxy]
+    B -- P2P WebRTC / Matchmaker --> C[Vant Host Server]
     C -- HTTP --> D[Local Ollama]
 ```
 
 ## The AI Gateway (Client-Side)
-To provide resilience, GhostCompute incorporates a Client-Side AI Gateway. 
+To provide resilience, Vant incorporates a Client-Side AI Gateway. 
 
 1. **Request Interception**: The Client Proxy (running at `http://127.0.0.1:11434`) intercepts all HTTP requests.
 2. **Model Aggregation**: When querying `/v1/models`, the Gateway queries the Host over P2P for local Ollama models. It then dynamically appends Gemini and Groq models (if API keys are provided in settings) and returns the combined list to your IDE.

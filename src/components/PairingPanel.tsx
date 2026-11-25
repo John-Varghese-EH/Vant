@@ -3,18 +3,20 @@ import { Icon } from './common/Icon';
 import { useDiscovery } from '../hooks/useDiscovery';
 import { usePairing } from '../hooks/usePairing';
 import { useHosting } from '../hooks/useHosting';
-import { getLocalIp, getActiveTunnelUrl, startQuickTunnel, safeListen } from '../lib/tauri';
+import { getLocalIp, getActiveTunnelUrl, startQuickTunnel, stopQuickTunnel, safeListen } from '../lib/tauri';
 import { Button } from './common/Button';
 import { Badge } from './common/Badge';
 import { Modal } from './common/Modal';
 import { EmptyState } from './common/EmptyState';
 import { StatusDot } from './common/StatusDot';
+import { useToast } from './common/Toast';
 
 export interface PairingPanelProps {
   mode: 'host' | 'client' | 'both';
 }
 
 export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<'broadcast' | 'nearby' | 'code' | 'link'>(() => {
     return mode === 'host' ? 'broadcast' : 'nearby';
   });
@@ -33,11 +35,12 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
   const [localIp, setLocalIp] = useState('127.0.0.1');
   const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
   const [tunnelError, setTunnelError] = useState<string | null>(null);
+  const [tunnelStatusMsg, setTunnelStatusMsg] = useState<string | null>(null);
   const [isStartingTunnel, setIsStartingTunnel] = useState(false);
 
   const [recentHosts, setRecentHosts] = useState<string[]>(() => {
     try {
-      const raw = localStorage.getItem('gc_recent_hosts');
+      const raw = localStorage.getItem('vant_recent_hosts') || localStorage.getItem('gc_recent_hosts');
       return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
@@ -46,22 +49,23 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
 
   const saveRecentHost = (host: string) => {
     try {
-      const raw = localStorage.getItem('gc_recent_hosts');
+      const raw = localStorage.getItem('vant_recent_hosts') || localStorage.getItem('gc_recent_hosts');
       const existing: string[] = raw ? JSON.parse(raw) : [];
       const filtered = existing.filter(h => h !== host);
       const updated = [host, ...filtered].slice(0, 4);
-      localStorage.setItem('gc_recent_hosts', JSON.stringify(updated));
+      localStorage.setItem('vant_recent_hosts', JSON.stringify(updated));
       setRecentHosts(updated);
     } catch {}
   };
 
   useEffect(() => {
-    const autoTarget = localStorage.getItem('gc_auto_connect');
+    const autoTarget = localStorage.getItem('vant_auto_connect') || localStorage.getItem('gc_auto_connect');
     if (autoTarget) {
       setCodeInputValue(autoTarget);
       setActiveTab('code');
+      localStorage.removeItem('vant_auto_connect');
       localStorage.removeItem('gc_auto_connect');
-      connectToUrl(autoTarget);
+      connectToUrl(autoTarget).catch(console.error);
     }
   }, [connectToUrl]);
 
@@ -77,11 +81,20 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
     let unlistenReady: (() => void) | undefined;
     let unlistenCleared: (() => void) | undefined;
     let unlistenError: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
+
+    safeListen<string>('tunnel-status', (event) => {
+      if (event.payload) {
+        setTunnelStatusMsg(event.payload);
+      }
+    }).then(fn => { unlistenStatus = fn; }).catch(console.error);
 
     safeListen<string>('tunnel-url-ready', (event) => {
       if (event.payload && event.payload.trim().length > 0) {
         setTunnelUrl(event.payload);
         setTunnelError(null);
+        setTunnelStatusMsg(null);
+        setIsStartingTunnel(false);
         generateLink().then(setGeneratedLink).catch(console.error);
       } else {
         setTunnelUrl(null);
@@ -92,11 +105,15 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
 
     safeListen('tunnel-url-cleared', () => {
       setTunnelUrl(null);
+      setTunnelStatusMsg(null);
+      setIsStartingTunnel(false);
     }).then(unlisten => {
       unlistenCleared = unlisten;
     }).catch(console.error);
 
     safeListen<string>('tunnel-error', (event) => {
+      setTunnelStatusMsg(null);
+      setIsStartingTunnel(false);
       if (event.payload) {
         setTunnelError(event.payload);
       }
@@ -108,17 +125,42 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
       if (unlistenReady) unlistenReady();
       if (unlistenCleared) unlistenCleared();
       if (unlistenError) unlistenError();
+      if (unlistenStatus) unlistenStatus();
     };
   }, [generateLink]);
 
+  useEffect(() => {
+    if (!isStartingTunnel) return;
+    const timer = setTimeout(() => {
+      setIsStartingTunnel(false);
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [isStartingTunnel]);
+
   const handleStartQuickTunnel = async () => {
     setIsStartingTunnel(true);
+    setTunnelError(null);
+    setTunnelStatusMsg('Starting Cloudflare Quick Tunnel...');
     try {
       await startQuickTunnel();
-    } catch (err) {
-      console.error('Failed to start quick tunnel:', err);
-    } finally {
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || 'Failed to start quick tunnel';
+      setTunnelError(msg);
+      setTunnelStatusMsg(null);
       setIsStartingTunnel(false);
+      toast.error('Tunnel Launch Failed', msg);
+    }
+  };
+
+  const handleStopQuickTunnel = async () => {
+    try {
+      await stopQuickTunnel();
+      setTunnelUrl(null);
+      setTunnelStatusMsg(null);
+      setIsStartingTunnel(false);
+      toast.info('Quick Tunnel stopped');
+    } catch (err: any) {
+      toast.error('Failed to stop tunnel', typeof err === 'string' ? err : err?.message);
     }
   };
 
@@ -243,7 +285,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
           <div className="flex flex-col gap-5 animate-fade-in">
             
             {/* Top Status Beacon */}
-            <div className="flex justify-between items-center pb-3 border-b border-white/5">
+            <div className="flex justify-between items-center pb-3 border-b border-[var(--gc-border)]">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                   <Icon name="sensors" size={18} className="animate-pulse" />
@@ -256,7 +298,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                     </Badge>
                   </div>
                   <div className="text-xs text-[var(--gc-text-muted)] font-mono mt-0.5">
-                    mDNS: _ghostcompute._tcp.local. • Port 8384
+                    mDNS: _vant._tcp.local. • Port 8384
                   </div>
                 </div>
               </div>
@@ -281,10 +323,10 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-black/40 border border-white/5">
+              <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[var(--gc-surface)] border border-[var(--gc-border)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                  <span className="text-sm sm:text-base font-mono font-bold text-white tracking-wide truncate">
+                  <span className="text-sm sm:text-base font-mono font-bold text-[var(--gc-text)] tracking-wide truncate">
                     http://{localIp}:8384
                   </span>
                 </div>
@@ -300,18 +342,29 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               </div>
 
               <p className="text-[11px] text-[var(--gc-text-muted)] leading-relaxed">
-                GhostCompute on your client laptop will automatically discover this PC on the same Wi-Fi. If your network blocks mDNS discovery, paste the address above into the client's Direct IP tab.
+                Vant on your client laptop will automatically discover this PC on the same Wi-Fi. If your network blocks mDNS discovery, paste the address above into the client's Direct IP tab.
               </p>
             </div>
 
             {/* Cloudflare Tunnel Status Card (Auto-started Free or Configured) */}
             <div className="p-4 rounded-xl bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] flex flex-col gap-2.5">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap justify-between items-center gap-2">
                 <span className="text-[11px] font-semibold text-[var(--gc-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
-                  <Icon name="public" size={15} className="text-violet-400" />
-                  <span>Public Zero-Trust Tunnel</span>
+                  <Icon name="public" size={15} className="text-accent" />
+                  <span>Cloudflare Quick Tunnel (Ephemeral)</span>
                 </span>
                 <div className="flex items-center gap-2">
+                  {tunnelUrl && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleStopQuickTunnel}
+                      className="flex items-center gap-1 text-[11px] px-2.5 py-1 text-danger"
+                    >
+                      <Icon name="stop" size={12} />
+                      <span>Stop</span>
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant={tunnelUrl ? "ghost" : "primary"}
@@ -322,16 +375,20 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                     <Icon 
                       name={isStartingTunnel ? "refresh" : "bolt"} 
                       size={12} 
-                      className={isStartingTunnel ? "animate-spin text-accent" : tunnelUrl ? "text-accent" : "text-white"} 
+                      className={isStartingTunnel ? "animate-spin" : ""} 
                     />
-                    <span>{isStartingTunnel ? "Starting..." : (tunnelUrl ? "Restart Tunnel" : "Start Quick Tunnel")}</span>
+                    <span>{isStartingTunnel ? "Connecting..." : (tunnelUrl ? "Restart" : "Start Quick Tunnel")}</span>
                   </Button>
                   {tunnelUrl ? (
                     <Badge variant="success" className="squircle-badge py-0.5 px-2 text-[10px] font-bold tracking-wider uppercase">
-                      Live Tunnel Ready
+                      Live
+                    </Badge>
+                  ) : isStartingTunnel ? (
+                    <Badge variant="info" className="squircle-badge py-0.5 px-2 text-[10px] font-bold tracking-wider uppercase">
+                      Provisioning
                     </Badge>
                   ) : (
-                    <Badge variant="neutral" className="squircle-badge py-0.5 px-2 text-[10px] font-bold tracking-wider uppercase text-zinc-400">
+                    <Badge variant="neutral" className="squircle-badge py-0.5 px-2 text-[10px] font-bold tracking-wider uppercase">
                       Offline
                     </Badge>
                   )}
@@ -339,10 +396,10 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               </div>
 
               {tunnelUrl ? (
-                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-violet-950/20 border border-violet-500/30">
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[var(--gc-accent-muted)] border border-violet-500/30">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
-                    <span className="text-xs sm:text-sm font-mono font-bold text-violet-200 tracking-tight truncate">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
+                    <span className="text-xs sm:text-sm font-mono font-semibold text-[var(--gc-text)] tracking-tight truncate">
                       {tunnelUrl}
                     </span>
                   </div>
@@ -351,16 +408,22 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                     variant="primary"
                     onClick={() => copyToClipboard(generatedLink || tunnelUrl, 'tunnel')}
                     className="shrink-0 text-xs px-3.5 py-1.5 flex items-center gap-1.5"
+                    title="Copies encrypted 1-click connect URL"
                   >
-                    {copiedTunnel ? <Icon name="check" size={14} className="text-emerald-300" /> : <Icon name="content_copy" size={14} />}
-                    <span>{copiedTunnel ? 'Copied!' : 'Copy Tunnel URL'}</span>
+                    {copiedTunnel ? <Icon name="check" size={14} /> : <Icon name="content_copy" size={14} />}
+                    <span>{copiedTunnel ? 'Copied!' : 'Copy Connect Link'}</span>
                   </Button>
                 </div>
+              ) : isStartingTunnel ? (
+                <div className="p-3 rounded-lg bg-[var(--gc-surface)] border border-[var(--gc-border)] text-xs text-[var(--gc-text)] flex items-center gap-2.5">
+                  <span className="spinner text-accent shrink-0" />
+                  <span>{tunnelStatusMsg || 'Provisioning encrypted Cloudflare edge tunnel...'}</span>
+                </div>
               ) : (
-                <div className="p-3 rounded-lg bg-black/40 border border-white/5 text-xs text-[var(--gc-text-muted)] flex items-center justify-between gap-3">
+                <div className="p-3 rounded-lg bg-[var(--gc-surface)] border border-[var(--gc-border)] text-xs text-[var(--gc-text-muted)] flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-zinc-500 shrink-0" />
-                    <span>Quick Tunnel is currently offline. Automatically clears when disconnected.</span>
+                    <div className="w-2 h-2 rounded-full bg-[var(--gc-text-dim)] shrink-0" />
+                    <span>Free, zero-config URL for connecting from outside your home Wi-Fi.</span>
                   </div>
                   <Button
                     size="sm"
@@ -392,12 +455,12 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               </p>
             </div>
 
-            {/* Temporary Pairing PIN */}
+            {/* Temporary Pairing Code */}
             <div className="p-4 rounded-xl bg-[var(--gc-surface-sunken)] border border-[var(--gc-border)] flex flex-col gap-2.5">
               <div className="flex justify-between items-center">
                 <span className="text-[11px] font-semibold text-[var(--gc-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
                   <Icon name="key" size={15} className="text-accent" />
-                  <span>Temporary Pairing PIN (Fast Connect)</span>
+                  <span>Temporary Pairing Code (Fast Connect)</span>
                 </span>
                 {generatedCode && (
                   <span className="text-[11px] text-[var(--gc-text-muted)] font-mono">
@@ -407,9 +470,9 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               </div>
 
               {generatedCode ? (
-                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-violet-950/20 border border-violet-500/30">
-                  <div className="flex items-center gap-2">
-                    <span className="text-mono text-xl sm:text-2xl font-extrabold tracking-[4px] text-accent">
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[var(--gc-accent-muted)] border border-violet-500/30">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-mono text-lg sm:text-xl font-bold tracking-[0.08em] text-accent truncate">
                       {generatedCode}
                     </span>
                   </div>
@@ -420,21 +483,21 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                     className="shrink-0 text-xs px-3 py-1 flex items-center gap-1.5"
                   >
                     {copiedPin ? <Icon name="check" size={14} className="text-emerald-400" /> : <Icon name="content_copy" size={14} />}
-                    <span>{copiedPin ? 'Copied' : 'Copy PIN'}</span>
+                    <span>{copiedPin ? 'Copied' : 'Copy Code'}</span>
                   </Button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-[var(--gc-text-muted)]">
-                    Generate a one-time 6-digit code for instant pairing.
+                    Generate a one-time pairing code for instant pairing.
                   </span>
                   <Button 
                     variant="ghost" 
                     size="sm" 
                     onClick={handleGenerateCode}
-                    className="text-xs px-3.5 py-1.5 border border-white/10 hover:border-white/20"
+                    className="text-xs px-3.5 py-1.5 border border-[var(--gc-border)] hover:border-[var(--gc-border-light)]"
                   >
-                    Generate PIN
+                    Generate Code
                   </Button>
                 </div>
               )}
@@ -447,12 +510,12 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
                   <Icon name="check" size={14} className="font-bold" />
                 </div>
                 <div className="text-xs">
-                  <div className="font-bold text-white">Client Successfully Connected & Paired!</div>
+                  <div className="font-bold text-[var(--gc-text)]">Client Successfully Connected & Paired!</div>
                   <div className="text-muted">You can proceed to the next step to select models and launch.</div>
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-black/40 border border-white/5">
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--gc-surface)] border border-[var(--gc-border)]">
                 <div className="relative flex items-center justify-center w-6 h-6 rounded-md bg-violet-500/10 text-accent shrink-0">
                   <Icon name="sensors" size={15} className="animate-pulse" />
                 </div>
@@ -468,9 +531,9 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
         {/* ================= NEARBY DISCOVERY TAB (CLIENT) ================= */}
         {activeTab === 'nearby' && (mode === 'client' || mode === 'both') && (
           <div className="flex flex-col gap-4 animate-fade-in">
-            <div className="flex justify-between items-center pb-2 border-b border-white/5">
+            <div className="flex justify-between items-center pb-2 border-b border-[var(--gc-border)]">
               <span className="text-muted text-xs">
-                {isSearching ? 'Scanning local Wi-Fi subnet for GhostCompute hosts...' : 'Discovery scan idle'}
+                {isSearching ? 'Scanning local Wi-Fi subnet for Vant hosts...' : 'Discovery scan idle'}
               </span>
               <div className="flex items-center gap-1.5 text-xs text-muted">
                 <span>{isSearching ? 'Scanning' : 'Paused'}</span>
@@ -510,7 +573,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               <div className="flex flex-col gap-2">
                 <div className="flex justify-between items-center mb-1">
                   <div className="text-[11px] font-semibold text-[var(--gc-text-muted)] uppercase tracking-wider">
-                    Discovered GhostCompute Hosts ({peers.length}):
+                    Discovered Vant Hosts ({peers.length}):
                   </div>
                   <Badge variant="info" className="squircle-badge py-0.5 px-2 text-[10px] font-bold">
                     mDNS Verified
@@ -576,7 +639,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
             <div>
               <h4 className="text-sm font-semibold text-[var(--gc-text)]">Direct Host Connection</h4>
               <p className="text-muted text-xs mt-1 leading-relaxed">
-                Enter your Host Gaming PC's LAN IP address, 6-digit pairing PIN, or persistent Cloudflare Tunnel URL.
+                Enter your Host Gaming PC's LAN IP address, pairing code, or persistent Cloudflare Tunnel URL.
               </p>
             </div>
 
@@ -599,7 +662,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               <input
                 type="text"
                 className="input text-xs flex-1 rounded-xl"
-                placeholder="e.g. https://xxx.trycloudflare.com/?token=..., 192.168.1.150:8384, or 6-digit PIN"
+                placeholder="e.g. https://xxx.trycloudflare.com/?token=..., 192.168.1.150:8384, or pairing code"
                 value={codeInputValue}
                 onChange={(e) => setCodeInputValue(e.target.value)}
               />
@@ -638,7 +701,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
             )}
 
             {/* Quick Presets */}
-            <div className="pt-2 border-t border-white/5 flex flex-col gap-1.5">
+            <div className="pt-2 border-t border-[var(--gc-border)] flex flex-col gap-1.5">
               <div className="flex justify-between items-center">
                 <span className="text-muted text-[11px] font-semibold uppercase tracking-wider">
                   Quick Presets:
@@ -661,7 +724,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[11px] font-mono text-zinc-300 hover:text-white transition-colors cursor-pointer flex items-center gap-1.5"
+                  className="px-2.5 py-1 rounded-lg bg-[var(--gc-surface-sunken)] hover:bg-[var(--gc-surface-elevated)] border border-[var(--gc-border)] text-[11px] font-mono text-[var(--gc-text-muted)] hover:text-[var(--gc-text)] transition-colors cursor-pointer flex items-center gap-1.5"
                   onClick={() => setCodeInputValue(`${localIp}:8384`)}
                 >
                   <Icon name="wifi" size={12} className="text-emerald-400" />
@@ -687,7 +750,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
         {activeTab === 'link' && (mode === 'host' || mode === 'both') && (
           <div className="flex flex-col gap-4 animate-fade-in">
             <div>
-              <h4 className="text-sm font-semibold text-white">Generate Client Invitation Link</h4>
+              <h4 className="text-sm font-semibold text-[var(--gc-text)]">Generate Client Invitation Link</h4>
               <p className="text-muted text-xs mt-1 leading-relaxed">
                 Generates a cryptographically signed link encoding your host endpoint and ephemeral Noise XX pairing token.
               </p>
@@ -711,7 +774,7 @@ export const PairingPanel: React.FC<PairingPanelProps> = ({ mode }) => {
 
             {generatedLink ? (
               <div className="flex flex-col gap-2 mt-2">
-                <div className="flex gap-2 items-center p-3 rounded-xl bg-black/60 border border-violet-500/30">
+                <div className="flex gap-2 items-center p-3 rounded-xl bg-[var(--gc-surface-sunken)] border border-violet-500/30">
                   <input 
                     type="text" 
                     className="input text-mono text-xs flex-1 bg-transparent border-none p-0 select-all" 

@@ -44,6 +44,8 @@ pub struct HttpProxyRequest {
     pub headers: Vec<(String, String)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -106,8 +108,8 @@ impl ClientConnection {
 
         let mut clean_url = url.trim().to_string();
 
-        // 1. Deep link unpacker: ghostcompute://pair?url=...&token=...
-        if clean_url.starts_with("ghostcompute://") {
+        // 1. Deep link unpacker: vant://pair?url=...&token=... (or ghostcompute://)
+        if clean_url.starts_with("vant://") || clean_url.starts_with("ghostcompute://") {
             if let Ok(parsed) = url::Url::parse(&clean_url) {
                 let mut target_url = None;
                 let mut token = None;
@@ -176,7 +178,7 @@ impl ClientConnection {
         request.headers_mut().insert(
             tokio_tungstenite::tungstenite::http::header::USER_AGENT,
             tokio_tungstenite::tungstenite::http::HeaderValue::from_static(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) GhostCompute/0.1.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Vant/0.1.0 Safari/537.36",
             ),
         );
 
@@ -278,6 +280,11 @@ impl ClientConnection {
                                                         if let Some(sender) = r.get("sys_stats") {
                                                             let _ = sender.send(parsed.clone()).await;
                                                         }
+                                                    } else if action == "pong" {
+                                                        let r = routers.lock().await;
+                                                        if let Some(sender) = r.get("ping") {
+                                                            let _ = sender.send(parsed.clone()).await;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -293,13 +300,15 @@ impl ClientConnection {
                             r.clear();
                         });
 
+                        let initial_latency = self.measure_latency().await.unwrap_or(0);
+
                         self.status = ConnectionStatus::Connected {
                             mode: if ws_url.starts_with("wss") {
                                 "WAN (WSS)".to_string()
                             } else {
                                 "LAN (WS)".to_string()
                             },
-                            latency_ms: 0,
+                            latency_ms: initial_latency,
                             host_name: remote_id[..8.min(remote_id.len())].to_string(),
                         };
                         Ok(())
@@ -323,7 +332,7 @@ impl ClientConnection {
                 } else if err_str.contains("400") {
                     format!("Connection rejected (HTTP 400 Bad Request) by {}. The WebSocket handshake request was malformed or rejected by edge proxy.", ws_url)
                 } else if err_str.contains("refused") || err_str.contains("10061") || err_str.contains("111") {
-                    format!("Connection refused by {}. Verify that GhostCompute is actively running in Server Mode on the Host PC and port 8384 is allowed through Windows Firewall.", ws_url)
+                    format!("Connection refused by {}. Verify that Vant is actively running in Server Mode on the Host PC and port 8384 is allowed through Windows Firewall.", ws_url)
                 } else {
                     format!("Failed to connect to {}: {}", ws_url, err_str)
                 };
@@ -401,48 +410,125 @@ impl ClientConnection {
     pub async fn remove_proxy_router(&self, req_id: &str) {
         self.routers.lock().await.remove(req_id);
     }
+
+    pub fn update_latency(&mut self, rtt_ms: u32) {
+        if let ConnectionStatus::Connected { mode, host_name, .. } = &self.status {
+            self.status = ConnectionStatus::Connected {
+                mode: mode.clone(),
+                latency_ms: rtt_ms,
+                host_name: host_name.clone(),
+            };
+        }
+    }
+
+    pub async fn measure_latency(&mut self) -> Result<u32, ClientError> {
+        let sender = self.sender.as_ref().ok_or(ClientError::NotConnected)?.clone();
+        let (tx, mut rx) = mpsc::channel(1);
+        self.routers.lock().await.insert("ping".to_string(), tx);
+
+        let payload = serde_json::to_vec(&serde_json::json!({ "action": "ping" }))
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+
+        let started = std::time::Instant::now();
+        sender.send(payload).await.map_err(|e| ClientError::Transport(e.to_string()))?;
+
+        let res = match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+            Ok(Some(_)) => {
+                let rtt = started.elapsed().as_millis().max(1) as u32;
+                self.update_latency(rtt);
+                Ok(rtt)
+            }
+            Ok(None) => Err(ClientError::Transport("connection closed".into())),
+            Err(_) => Err(ClientError::Transport("ping timeout".into())),
+        };
+
+        self.routers.lock().await.remove("ping");
+        res
+    }
 }
 
 impl ClientConnection {
-    pub async fn send_chat_stream(
+    pub async fn prepare_chat_stream(
         &mut self,
         payload: &[u8],
-        app: tauri::AppHandle,
-    ) -> Result<(), ClientError> {
-        // Parse chat request to extract the message and model
+    ) -> Result<(String, mpsc::Receiver<serde_json::Value>, Arc<Mutex<HashMap<String, mpsc::Sender<serde_json::Value>>>>), ClientError> {
         let v: serde_json::Value = serde_json::from_slice(payload)
             .map_err(|e| ClientError::Transport(format!("Invalid chat payload: {}", e)))?;
-        let message = v.get("message")
+
+        let message = v
+            .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("")
             .to_string();
 
-        let explicit_model = v.get("model")
+        let explicit_model = v
+            .get("model")
             .and_then(|m| m.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+
+        let system_prompt = v
+            .get("system_prompt")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string());
+
+        let temperature = v.get("temperature").and_then(|t| t.as_f64());
 
         let target_model = if let Some(m) = explicit_model {
             m
         } else {
             let remote_models = self.get_remote_models().await.unwrap_or_default();
-            remote_models.into_iter().next().unwrap_or_else(|| "llama3.2".to_string())
+            remote_models
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| "llama3.2".to_string())
         };
-        
-        let req_id = uuid::Uuid::new_v4().to_string();
-        
-        let ollama_req = serde_json::json!({
-            "model": target_model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": message
+
+        let mut chat_messages: Vec<serde_json::Value> = Vec::new();
+        if let Some(sys) = system_prompt {
+            chat_messages.push(serde_json::json!({
+                "role": "system",
+                "content": sys
+            }));
+        }
+
+        if let Some(history) = v.get("messages").and_then(|m| m.as_array()) {
+            for item in history {
+                if let (Some(role), Some(content)) = (
+                    item.get("role").and_then(|r| r.as_str()),
+                    item.get("content").and_then(|c| c.as_str()),
+                ) {
+                    chat_messages.push(serde_json::json!({
+                        "role": role,
+                        "content": content
+                    }));
                 }
-            ],
+            }
+        } else {
+            chat_messages.push(serde_json::json!({
+                "role": "user",
+                "content": message
+            }));
+        }
+
+        let mut ollama_req = serde_json::json!({
+            "model": target_model,
+            "messages": chat_messages,
             "stream": true,
             "keep_alive": "30m"
         });
-        
+
+        if let Some(temp) = temperature {
+            if let Some(obj) = ollama_req.as_object_mut() {
+                obj.insert(
+                    "options".to_string(),
+                    serde_json::json!({ "temperature": temp }),
+                );
+            }
+        }
+
+        let req_id = uuid::Uuid::new_v4().to_string();
         let req = HttpProxyRequest {
             action: "http_proxy".to_string(),
             req_id: req_id.clone(),
@@ -453,21 +539,51 @@ impl ClientConnection {
                 &base64::engine::general_purpose::STANDARD,
                 serde_json::to_vec(&ollama_req)?,
             )),
+            target_port: None,
         };
-        
-        let mut rx = self.proxy_http_request(req).await?;
-        
+
+        let rx = self.proxy_http_request(req).await?;
+        Ok((req_id, rx, self.routers.clone()))
+    }
+
+    pub async fn stream_chat_chunks(
+        req_id: &str,
+        mut rx: mpsc::Receiver<serde_json::Value>,
+        routers: Arc<Mutex<HashMap<String, mpsc::Sender<serde_json::Value>>>>,
+        app: tauri::AppHandle,
+    ) -> Result<(), ClientError> {
         use tauri::Emitter;
-        
-        // Wait for chunks
+        let mut line_buffer = String::new();
+        let mut error_msg: Option<String> = None;
+        let mut http_error_status: Option<u16> = None;
+        let mut saw_done = false;
+
         while let Some(chunk) = rx.recv().await {
             if let Ok(proxy_chunk) = serde_json::from_value::<HttpProxyResponseChunk>(chunk) {
+                if let Some(code) = proxy_chunk.status_code {
+                    if code >= 400 {
+                        http_error_status = Some(code);
+                    }
+                }
                 if let Some(b64) = proxy_chunk.data_base64 {
-                    if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
-                        // Ollama returns newline delimited JSON chunks
-                        if let Ok(text) = String::from_utf8(bytes) {
-                            for line in text.split('\n').filter(|l| !l.is_empty()) {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Ok(bytes) =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                    {
+                        let text = String::from_utf8_lossy(&bytes);
+                        line_buffer.push_str(&text);
+                        while let Some(newline_pos) = line_buffer.find('\n') {
+                            let line = line_buffer[..newline_pos].trim().to_string();
+                            line_buffer = line_buffer[newline_pos + 1..].to_string();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                                if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                                    error_msg = Some(err.to_string());
+                                } else {
+                                    if parsed.get("done").and_then(|d| d.as_bool()) == Some(true) {
+                                        saw_done = true;
+                                    }
                                     let _ = app.emit("chat-chunk", parsed);
                                 }
                             }
@@ -475,14 +591,47 @@ impl ClientConnection {
                     }
                 }
                 if proxy_chunk.done {
-                    // Send an empty done chunk to trigger UI end
-                    let _ = app.emit("chat-chunk", serde_json::json!({"done": true}));
+                    let rem = line_buffer.trim();
+                    if !rem.is_empty() {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(rem) {
+                            if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                                error_msg = Some(err.to_string());
+                            } else {
+                                if parsed.get("done").and_then(|d| d.as_bool()) == Some(true) {
+                                    saw_done = true;
+                                }
+                                let _ = app.emit("chat-chunk", parsed);
+                            }
+                        } else if http_error_status.is_some() {
+                            error_msg = Some(rem.to_string());
+                        }
+                    }
                     break;
                 }
             }
         }
-        
-        self.remove_proxy_router(&req_id).await;
+
+        routers.lock().await.remove(req_id);
+
+        if let Some(err) = error_msg {
+            let _ = app.emit("chat-chunk", serde_json::json!({"error": err, "done": true}));
+            return Err(ClientError::Transport(err));
+        }
+
+        if let Some(code) = http_error_status {
+            let msg = if code == 502 {
+                "Host Ollama engine is offline or unreachable on port 11434.".to_string()
+            } else {
+                format!("Host AI engine returned HTTP {}", code)
+            };
+            let _ = app.emit("chat-chunk", serde_json::json!({"error": msg, "done": true}));
+            return Err(ClientError::Transport(msg));
+        }
+
+        if !saw_done {
+            let _ = app.emit("chat-chunk", serde_json::json!({"done": true}));
+        }
+
         Ok(())
     }
 
@@ -495,15 +644,18 @@ impl ClientConnection {
             path: "/api/tags".to_string(),
             headers: vec![],
             body_base64: None,
+            target_port: None,
         };
-        
+
         let mut rx = self.proxy_http_request(req).await?;
         let mut full_body = Vec::new();
-        
+
         while let Some(chunk) = rx.recv().await {
             if let Ok(proxy_chunk) = serde_json::from_value::<HttpProxyResponseChunk>(chunk) {
                 if let Some(b64) = proxy_chunk.data_base64 {
-                    if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+                    if let Ok(bytes) =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                    {
                         full_body.extend(bytes);
                     }
                 }
@@ -512,12 +664,15 @@ impl ClientConnection {
                 }
             }
         }
-        
+
         self.remove_proxy_router(&req_id).await;
-        
+
         if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&full_body) {
             if let Some(models) = parsed.get("models").and_then(|m| m.as_array()) {
-                let names = models.iter().filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())).collect();
+                let names = models
+                    .iter()
+                    .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                    .collect();
                 return Ok(names);
             }
         }
@@ -526,27 +681,33 @@ impl ClientConnection {
 
     pub async fn get_host_sys_stats(&mut self) -> Result<serde_json::Value, ClientError> {
         let sender = self.sender.as_ref().ok_or(ClientError::NotConnected)?;
-        
+
         let (tx, mut rx) = mpsc::channel(1);
         self.routers.lock().await.insert("sys_stats".to_string(), tx);
-        
+
         let payload = serde_json::to_vec(&serde_json::json!({ "action": "get_sys_stats" }))
             .map_err(|e| ClientError::Transport(e.to_string()))?;
-            
-        sender.send(payload).await.map_err(|e| ClientError::Transport(e.to_string()))?;
-            
+
+        let started = std::time::Instant::now();
+        sender
+            .send(payload)
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+
         let res = match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
             Ok(Some(msg)) => {
+                let rtt = started.elapsed().as_millis().max(1) as u32;
+                self.update_latency(rtt);
                 if let Some(data) = msg.get("data") {
                     Ok(data.clone())
                 } else {
                     Err(ClientError::Transport("Invalid sys_stats format".into()))
                 }
-            },
+            }
             Ok(None) => Err(ClientError::Transport("connection closed".into())),
             Err(_) => Err(ClientError::Transport("timeout".into())),
         };
-        
+
         self.routers.lock().await.remove("sys_stats");
         res
     }

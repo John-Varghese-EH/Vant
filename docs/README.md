@@ -1,13 +1,13 @@
-# GhostCompute Documentation
+# Vant Documentation
 
-Welcome to the **GhostCompute** documentation. GhostCompute allows you to transform a powerful gaming laptop into a centralized AI inference server (Host) and securely access it from any low-end laptop (Client) over the internet, feeling as if the models were running locally. 
+Welcome to the **Vant** documentation. Vant allows you to transform a powerful gaming laptop into a centralized AI inference server (Host) and securely access it from any low-end laptop (Client) over the internet, feeling as if the models were running locally. 
 
 This repository provides an enterprise-grade AI Gateway and P2P tunnel built with Rust and Tauri.
 
 ## Table of Contents
 
 - [Setup & Configuration](setup.md)
-  Learn how to install and configure GhostCompute on both the Host and Client laptops.
+  Learn how to install and configure Vant on both the Host and Client laptops.
 - [Architecture](architecture.md)
   Dive deep into how the Peer-to-Peer (P2P) tunnel and AI Gateway fallback logic work.
 - [API Reference](api_reference.md)

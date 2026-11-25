@@ -1,115 +1,154 @@
 <div align="center">
-  <img src="public/logo.svg" alt="GhostCompute Logo" width="140" height="140" />
-  
-  # GhostCompute
 
-  ### Turn your high-end gaming PC into a private AI cloud server accessible from any laptop.
+  <img src="public/Vant_banner.gif" alt="Vant Banner" width="100%" style="border-radius: 16px; margin-bottom: 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);" />
 
-  [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-  [![Built with Tauri v2](https://img.shields.io/badge/Built_with-Tauri_v2-24c8db.svg)](https://tauri.app/)
+  <br />
+
+  <img src="public/Vant_logo-icon.png" alt="Vant Icon" width="96" height="96" />
+
+  <br /><br />
+
+  # Vant
+
+  ### Apple-grade P2P Distributed GPU & AI Compute Mesh
+  **Transform any GPU workstation or gaming PC into a private, encrypted AI supercomputer accessible from any client laptop.**
+
+  <br />
+
+  [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-8b5cf6.svg)](LICENSE)
+  [![Built with Tauri v2](https://img.shields.io/badge/Desktop-Tauri_v2-24c8db.svg)](https://tauri.app/)
   [![Frontend React 19](https://img.shields.io/badge/Frontend-React_19_+_Tailwind_v4-61dafb.svg)](https://react.dev/)
-  [![Backend Rust](https://img.shields.io/badge/Backend-Rust_Async-dea584.svg)](https://www.rust-lang.org/)
-  [![Security Noise Protocol](https://img.shields.io/badge/Tunnel-Cloudflare_+_Noise_XX-f38020.svg)](https://www.cloudflare.com/)
+  [![Backend Rust Async](https://img.shields.io/badge/Backend-Rust_Tokio-dea584.svg)](https://www.rust-lang.org/)
+  [![Security Noise Protocol](https://img.shields.io/badge/Tunnel-Noise_XX_+_ChaCha20-10b981.svg)](https://noiseprotocol.org/)
+  [![Cloudflare Zero-Trust](https://img.shields.io/badge/Relay-Cloudflare_Quick_Tunnel-f38020.svg)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 
   <br />
 
   <p align="center">
-    <b>Stop paying monthly cloud GPU subscriptions.</b><br />
-    Harness the full power of your home workstation, your own gaming PC, or a friend's GPU rig (with mutual consent) while coding from a coffee shop with a lightweight MacBook or ultrabook.
+    <b>Stop paying exorbitant monthly cloud GPU bills.</b><br />
+    Unleash the full compute power of your home workstation, your dedicated gaming laptop, or a peer's GPU rig (with mutual cryptographic consent) while coding from a coffee shop with a silent, lightweight MacBook or ultrabook.
   </p>
-
-  <br />
-
-  <img src="docs/screenshots/GhostCompute-01.png" alt="GhostCompute Mode Selection Screen" width="900" style="border-radius: 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);" />
 
 </div>
 
 ---
 
-## The Problem GhostCompute Solves
+## The Vision Behind Vant
 
-High-performance AI inference and heavy generative models require substantial dedicated VRAM. But carrying a 6-pound gaming laptop with loud fans and a 2-hour battery life is painful, and renting cloud GPUs costs hundreds of dollars every month while exposing your proprietary code and private conversations to external cloud providers.
+High-performance AI inference and heavy generative models require substantial dedicated memory bandwidth and tensor acceleration. But carrying a 6-pound gaming laptop with roaring fans and a 90-minute battery life is impractical, and renting cloud GPUs costs hundreds of dollars every month while exposing private codebases and confidential conversations to third-party providers.
 
-**GhostCompute gives you the best of both worlds:**
-1. **Zero Cloud Costs:** Run 70B LLMs, ComfyUI pipelines, and AI agent workflows completely on the GPU hardware you already own.
-2. **Infinite Portability:** Code and chat on a sleek, silent, battery-efficient laptop anywhere in the world.
-3. **Share Hardware with Consent (Host PC or Friend's Gaming Laptop):** Turn any idle gaming PC, workstation, or a friend's idle GPU laptop into a shared private node with cryptographic consent, Short Authentication String (SAS) confirmation, and revocable RBAC access tokens.
-4. **Drop-in Developer Compatibility:** Seamlessly routes local AI coding tools (Claude Code, Cursor, Continue, Antigravity) through a silent background proxy daemon without changing a single line of your workflow.
-5. **Zero-Trust Security:** Built on Noise-XX handshake cryptography (ChaCha20-Poly1305 + Curve25519) and zero-config Cloudflare Tunnels with no open router ports or static IP requirements.
+**Vant delivers total computational sovereignty:**
+1. **Zero Cloud Costs:** Run 70B LLMs, ComfyUI diffusion matrices, and autonomous coding agents entirely on bare-metal hardware you already own.
+2. **Infinite Portability:** Code, debug, and design on an ultra-thin laptop with all-day battery life anywhere in the world.
+3. **P2P Resource Sharing with Consent:** Turn any idle workstation or a trusted friend's laptop into a shared private node with Short Authentication String (SAS) confirmation and revocable bearer tokens.
+4. **Seamless Developer Drop-in:** Silently routes IDE extensions (Claude Code, Cursor, Continue.dev, Antigravity) through a background loopback daemon (`127.0.0.1:11434`) without changing a single configuration key.
+5. **Zero-Trust Hardened Cryptography:** Built on Noise-XX mutual handshake encryption (Curve25519, ChaCha20-Poly1305, BLAKE2s) and zero-config Cloudflare Tunnels without port-forwarding or public IP exposure.
 
 ---
 
-## How It Works: Two Modes, One Binary
+## Two Roles, One Single Binary
 
-GhostCompute compiles into a single, lightning-fast native binary that runs in either of two modes:
+Vant compiles into a self-contained, high-performance binary that seamlessly transitions between two operational roles:
 
-| | 🖥️ Server Mode (Host) | 💻 Client Mode (Consumer) |
+| Feature | 🖥️ Server Role (Host Node) | 💻 Client Role (Consumer Node) |
 |:---|:---|:---|
-| **Where it runs** | Your GPU Workstation, Gaming PC, or a Friend's GPU Laptop (with host consent) | Your MacBook, ThinkPad, Chromebook, or travel ultrabook |
-| **What it does** | Drives bare-metal GPU inference, manages 16 open-source AI containers, and orchestrates encrypted tunnels | Silently forwards requests on `127.0.0.1:11434` to your remote GPU rig with sub-millisecond local proxy latency |
-| **Integrations** | Ollama, LM Studio, ComfyUI, Open WebUI, n8n, Tabby, Dify | Claude Code, Cursor, Antigravity IDE, Continue, Web Browsers |
-| **Connection** | Zero-config Cloudflare Quick Tunnel or instant LAN mDNS | One-click pairing with Short Authentication String (SAS) verification |
+| **Target Hardware** | NVIDIA GeForce RTX rig, AMD Radeon workstation, or NPU laptop | MacBook, ThinkPad, Surface, Chromebook, or travel laptop |
+| **Primary Function** | Drives bare-metal GPU/NPU acceleration, manages 16 AI containers, and orchestrates encrypted tunnels | Silently forwards inference requests on `127.0.0.1:11434` to your remote GPU rig with sub-millisecond local proxy overhead |
+| **Supported Engines** | Ollama, LM Studio, ComfyUI, Open WebUI, n8n, Tabby, Dify | Claude Code, Cursor, Antigravity IDE, Continue.dev, Web Browsers |
+| **Networking** | Zero-config Cloudflare Quick Tunnel or automatic LAN mDNS (`_vant._tcp.local.`) | One-click pairing with Short Authentication String (SAS) cryptographic verification |
+
+---
+
+## Heterogeneous Hardware Acceleration: RTX + Radeon + NPU
+
+Modern gaming laptops and workstations often pack diverse computational silicon:
+- **Discrete GPU:** e.g. NVIDIA GeForce RTX 4050 / 3060 / 4080 (Dedicated high-speed VRAM).
+- **Integrated GPU:** e.g. AMD Radeon 780M / 680M (Shared high-bandwidth unified RAM).
+- **Neural Processing Unit (NPU):** e.g. AMD Ryzen AI / Intel NPU (Ultra-efficient INT8/INT4 matrix acceleration).
+- **Host CPU & RAM:** Fast DDR5 system memory for layer offloading.
+
+```mermaid
+flowchart TD
+    subgraph Client["Consumer Laptop (Anywhere in the World)"]
+        IDE["Coding IDE / CLI Agent\n(Claude Code / Cursor / Continue)"]
+        LocalProxy["Vant Local Loopback Proxy\n(127.0.0.1:11434 & /v1)"]
+        IDE -->|OpenAI / Ollama Wire Protocol| LocalProxy
+    end
+
+    subgraph WAN["End-to-End Encrypted Tunnel"]
+        NoiseTunnel["Noise-XX E2EE WebSocket Tunnel\n(ChaCha20-Poly1305 + Curve25519)"]
+    end
+
+    subgraph Host["Host Rig (Gaming PC / Workstation)"]
+        Daemon["Vant Daemon Core (Rust Async)"]
+        Router["Dynamic Tensor & Context Scheduler"]
+        
+        subgraph Silicon["Heterogeneous Hardware Acceleration"]
+            RTX["NVIDIA GeForce RTX dGPU\n(Primary Attention & Weight Tensors via CUDA)"]
+            Radeon["AMD Radeon iGPU\n(Embedding & Vision Offload via DirectML / ROCm)"]
+            NPU["Dedicated Ryzen AI NPU\n(INT4/INT8 Quantized Matrix Acceleration)"]
+            SysRAM["Host DDR5 RAM\n(Spillover Layer Weights & KV Cache Buffers)"]
+        end
+
+        Daemon --> Router
+        Router --> RTX
+        Router --> Radeon
+        Router --> NPU
+        Router --> SysRAM
+    end
+
+    LocalProxy <==>|Encrypted Mesh| NoiseTunnel
+    NoiseTunnel <==> Daemon
+```
+
+### Optimizing Heterogeneous Silicon in Vant
+1. **CUDA VRAM Pinning:** Vant requests persistent model memory locks (`"keep_alive": "30m"`) to eliminate cold-start DMA latency across queries.
+2. **Context Layer Offloading:** When dedicated VRAM fills up, GGUF models automatically split layer weights across dedicated VRAM and host RAM without crashing the process.
+3. **NPU & DirectML Offloading:** Lightweight embedding models (e.g. `nomic-embed-text`, `bge-small`) and whisper transcription can run concurrently on integrated NPUs and Radeon iGPUs, freeing 100% of discrete RTX VRAM for 14B+ parameter reasoning engines.
 
 ---
 
 ## Architecture: Hybrid Runtime Model
 
-To maximize inference performance while maintaining clean system management, GhostCompute separates workloads into two execution layers:
+Vant uses a dual-layer runtime model designed to extract maximum bare-metal throughput while maintaining container isolation:
 
 ```mermaid
 flowchart LR
-    subgraph ClientLaptop["Client Device (Lightweight Laptop)"]
+    subgraph HostPC["Vant Host Rig Architecture"]
         direction TB
-        Agent["Coding Agents\n(Claude Code / Cursor / Antigravity)"]
-        Browser["Web App Shortcuts\n(ComfyUI / Open WebUI / n8n)"]
-        ClientProxy["GhostCompute Client Proxy\n(127.0.0.1:11434 /v1)"]
-        Agent -->|HTTP / OpenAI API| ClientProxy
-    end
-
-    subgraph Tunnel["Zero-Trust Encrypted Tunnel"]
-        CFTunnel["Cloudflare Tunnel / Pinggy\n(Noise Protocol XX E2EE)"]
-    end
-
-    subgraph HostPC["Server Host (Gaming PC / Workstation)"]
-        direction TB
-        HostDaemon["GhostCompute Host Daemon\n(Reverse Proxy and Admission Gate)"]
-        RBAC["RBAC and API Token Store\n(Admin / Developer / Viewer)"]
+        HostDaemon["Vant Host Core Daemon\n(Reverse Proxy, Admission Gate, Token Guard)"]
         
-        subgraph NativeEngines["Native Bare-Metal Tier (No Container Overhead)"]
-            Ollama["Ollama Engine (Port 11434)"]
-            LMStudio["LM Studio (Port 1234)"]
-            Jan["Jan.ai (Port 1337)"]
+        subgraph NativeTier["Bare-Metal Native Tier (Zero Virtualization Overhead)"]
+            Ollama["Ollama Engine\n(Port 11434 · Direct CUDA / Metal)"]
+            LMStudio["LM Studio Server\n(Port 1234 · Direct GPU)"]
+            Jan["Jan.ai Engine\n(Port 1337)"]
         end
 
-        subgraph DockerComposeApps["Containerized Application Tier (Docker Compose)"]
+        subgraph ContainerTier["Containerized Workspace Tier (Automated Compose)"]
             OpenWebUI["Open WebUI (Port 3000)"]
-            Comfy["ComfyUI (Port 8188)"]
+            Comfy["ComfyUI Diffusion (Port 8188)"]
             N8N["n8n Automation (Port 5678)"]
-            Dify["Dify App Platform (Port 3100)"]
+            Dify["Dify Agent Platform (Port 3100)"]
             Qdrant["Qdrant Vector DB (Port 6333)"]
+            Tabby["Tabby Code Server (Port 8082)"]
         end
 
-        HostDaemon --> RBAC
-        HostDaemon --> NativeEngines
-        HostDaemon --> DockerComposeApps
+        HostDaemon --> NativeTier
+        HostDaemon --> ContainerTier
     end
-
-    ClientProxy <==>|Encrypted WebSocket / mTLS| CFTunnel
-    Browser -->|Direct Web UI| CFTunnel
-    CFTunnel <==> HostDaemon
 ```
 
-### 1. Bare-Metal Native Tier (Zero Docker Overhead)
-Inference engines (Ollama, LM Studio, Jan.ai) run natively on the host operating system. This guarantees maximum memory bandwidth, direct CUDA/ROCm hardware utilization, and zero container virtualization latency.
+### 1. Bare-Metal Native Tier
+Heavy inference engines (Ollama, LM Studio) run directly on the host operating system. This ensures direct access to CUDA/ROCm drivers, maximum memory bus bandwidth, and zero container virtualization overhead.
 
-### 2. Containerized Application Tier (Docker Compose)
-Complex multi-service web platforms (Open WebUI, ComfyUI, AnythingLLM, n8n, Dify, Activepieces, Flowise, Langflow, Open Interpreter, Tabby, Qdrant) are managed via declarative Docker Compose recipes with isolated data volumes and managed port bindings.
+### 2. Containerized Application Tier
+Full-stack web suites (Open WebUI, ComfyUI, AnythingLLM, n8n, Dify, Qdrant) are managed through declarative Docker Compose blueprints with isolated storage directories and health checks.
 
 ---
 
-## One-Click Application Catalog (16 Tools)
+## 16 Supported AI Engines & Services
 
-GhostCompute includes automated deployment definitions for 16 premier open-source AI tools:
+Vant includes ready-to-run deployment profiles for 16 leading open-source AI tools:
 
 | Category | Supported Services | Deployment Mode | Primary Capability | Default Port |
 |:---|:---|:---|:---|:---|
@@ -122,67 +161,65 @@ GhostCompute includes automated deployment definitions for 16 premier open-sourc
 
 ---
 
-## Security Model and Multi-Tenancy
+## Defense-in-Depth Security Protocol
 
-GhostCompute incorporates defense-in-depth security principles across all transport and application layers:
-
-- **End-to-End Encryption (Noise Protocol XX):** All peer sessions establish authenticated, end-to-end encrypted tunnels using the Noise XX pattern with Curve25519, ChaCha20-Poly1305, and BLAKE2s. Intermediate tunnel relays (such as Cloudflare or Pinggy) terminate only the outer transport TLS and cannot inspect inner application payloads.
-- **Short Authentication String (SAS) Verification:** During initial peer pairing, both devices generate an identical 6-character cryptographic verification string derived from the ephemeral session keys, preventing Man-in-the-Middle (MITM) attacks.
-- **Role-Based Access Control (RBAC):** Hosts assign granular permission tiers to connected clients:
-  - **Admin:** Full administrative control, service management, model pulling, and client pairing.
-  - **Developer:** Unlimited access to AI inference endpoints and development proxies.
-  - **Viewer:** Read-only access with restricted request quotas.
-- **Cryptographic API Tokens:** Hosts issue revocable `gc_live_*` bearer tokens with configurable requests-per-minute (RPM) rate limiting.
-- **VRAM and Compute Guard:** Real-time hardware telemetry monitors GPU temperature, VRAM allocation, and system memory, automatically throttling oversized context requests.
+- **End-to-End Encryption (Noise-XX):** All sessions establish authenticated, end-to-end encrypted tunnels using Curve25519 key exchange, ChaCha20-Poly1305 AEAD, and BLAKE2s hashing. Intermediate relays terminate only the outer transport TLS and cannot view inner payloads.
+- **Short Authentication String (SAS):** During initial pairing, both devices generate an identical cryptographic verification string derived from ephemeral keys, providing guaranteed protection against Man-in-the-Middle (MITM) tampering.
+- **Role-Based Access Control (RBAC):**
+  - **Admin:** Complete system configuration, service lifecycle, and peer admission.
+  - **Developer:** Unlimited access to AI inference endpoints and local loopback proxies.
+  - **Viewer:** Read-only access with rate-limited quotas.
+- **Cryptographic Bearer Tokens:** Hosts issue revocable `vant_live_*` bearer tokens with configurable requests-per-minute (RPM) limits.
+- **Hardware Telemetry Guard:** Real-time hardware monitors track GPU temperature, VRAM allocation, and memory pressure to prevent host overheating.
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-
-- **Host Device:** Windows 10/11 (64-bit) or Linux (x86_64) with dedicated GPU (NVIDIA CUDA recommended).
-- **Client Device:** macOS, Linux, or Windows (any lightweight hardware).
-- **Development Toolchain:** Node.js 18+ and Rust (stable) installed.
+- **Host Rig:** Windows 10/11 (64-bit) or Linux (x86_64) with dedicated GPU (NVIDIA CUDA recommended).
+- **Client Laptop:** macOS, Linux, or Windows (any lightweight hardware).
+- **Toolchain:** Node.js 18+ and Rust (stable) installed.
 
 ### Build and Launch
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/John-Varghese-EH/GhostCompute.git
 cd GhostCompute
 
 # Install frontend dependencies
 npm install
 
-# Run application in development mode
+# Run in development mode
 npm run tauri dev
 
-# Compile release package
+# Compile production release binary
 npm run tauri build
 ```
 
 ---
 
-## Step-by-Step Connection Guide
+## Quick Connection Walkthrough
 
-### Setting up the Host (Server)
-1. Launch GhostCompute and select **Server Mode (Host)**.
-2. In Step 2 (**LAN Broadcast & Client Pairing**), the application starts hosting on port `8384` and advertises availability across your local network via mDNS (`_ghostcompute._tcp.local.`).
-3. Note your displayed local IP address (e.g. `http://192.168.1.150:8384`) or click **Generate PIN** to create a temporary 6-digit code.
+### 1. Starting the Host (Server)
+1. Launch Vant and choose **Server Role (Host)**.
+2. In the console, verify the host daemon is running on port `8384`.
+3. Vant automatically broadcasts its identity via local mDNS (`_vant._tcp.local.`) and establishes an encrypted Cloudflare Tunnel for WAN access.
+4. Copy the quick pairing link or display the 6-digit PIN.
 
-### Connecting from a Client (Laptop)
-1. Launch GhostCompute on your laptop and select **Client Mode (Consumer)**.
-2. Under **Nearby Discovery**, your Host machine will appear automatically. Click **Connect**.
-   *(If on a separated subnet or remote network, switch to the Direct IP tab and enter the Host IP address or Cloudflare Tunnel URL).*
-3. Verify that the 6-character verification string matches the Host display, and click **Confirm Match**.
-4. Both devices are now paired. Your client proxy daemon runs on `http://127.0.0.1:11434`.
+### 2. Connecting from the Client (Laptop)
+1. Launch Vant on your laptop and choose **Client Role (Consumer)**.
+2. Nearby hosts appear automatically in the **Nearby Discovery** tab. Click **Connect**.
+   *(If across different networks or remote Wi-Fi, paste the Host Cloudflare Tunnel URL into the Direct IP tab).*
+3. Verify the Short Authentication String matches between both screens and click **Confirm Match**.
+4. Your client proxy is now live at `http://127.0.0.1:11434`.
 
 ---
 
-## Coding Agent Integration
+## Developer IDE Integration
 
-GhostCompute routes developer requests directly to your remote GPU rig without changing local workflows.
+Vant acts as a transparent, zero-latency drop-in proxy for all major AI coding tools.
 
 ### Claude Code CLI
 ```bash
@@ -191,17 +228,17 @@ claude --provider ollama --model <model-name>
 ```
 
 ### Cursor & Antigravity IDE
-Configure local model settings as follows:
+Configure custom OpenAI or Ollama provider:
 - **Base URL:** `http://127.0.0.1:11434/v1`
-- **API Key:** `gc_live_authenticated` (or any string)
-- **Model Name:** Enter any model installed on your remote host (e.g. `qwen2.5-coder:7b`, `llama3.3:70b`, `deepseek-r1:14b`)
+- **API Key:** `sk-vant` (or any string)
+- **Model Name:** Any model loaded on your host (e.g. `qwen2.5-coder:7b`, `llama3.3:70b`, `deepseek-r1:14b`)
 
 ### Continue.dev (VS Code & JetBrains)
 ```json
 {
   "models": [
     {
-      "title": "GhostCompute Remote",
+      "title": "Vant Remote Compute",
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
       "apiBase": "http://127.0.0.1:11434"
@@ -212,11 +249,11 @@ Configure local model settings as follows:
 
 ---
 
-## Port Allocation Reference
+## Default Network Ports
 
-| Port | Service | Protocol | Access Scope |
+| Port | Service Name | Protocol | Exposure Scope |
 |:---|:---|:---|:---|
-| `8384` | GhostCompute Host Daemon | TCP / WebSocket | LAN / Cloudflare Tunnel |
+| `8384` | Vant Core Host Daemon | TCP / WebSocket | LAN / Cloudflare Tunnel |
 | `11434` | Ollama Engine (Host) & Local Proxy (Client) | HTTP / REST | Host Internal & Client Localhost |
 | `1234` | LM Studio Inference Server | HTTP / REST | Host Localhost |
 | `3000` | Open WebUI Dashboard | HTTP | Host / Tunnel |
@@ -237,5 +274,5 @@ Configure local model settings as follows:
 ---
 
 <div align="center">
-  <sub>© 2026 John Varghese (J0X) • GhostCompute • Licensed under GPLv3</sub>
+  <sub>© 2026 John Varghese (J0X) • Vant • Licensed under GPLv3</sub>
 </div>

@@ -5,7 +5,9 @@ use std::thread;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-pub const SERVICE_TYPE: &str = "_ghostcompute._tcp.local.";
+pub const SERVICE_TYPE: &str = "_vant._tcp.local.";
+#[allow(dead_code)]
+pub const LEGACY_SERVICE_TYPE: &str = "_ghostcompute._tcp.local.";
 #[allow(dead_code)]
 pub const DEFAULT_PORT: u16 = 8384;
 
@@ -146,69 +148,76 @@ impl MdnsHandle {
             let _ = self.stop_browsing();
         }
         let receiver = self.daemon.browse(SERVICE_TYPE)?;
+        let legacy_receiver = self.daemon.browse(LEGACY_SERVICE_TYPE).ok();
         self.is_browsing = true;
         let (tx, rx) = mpsc::channel(32);
 
-        thread::spawn(move || {
-            let mut known_peers = HashMap::new();
+        let spawn_listener = |rec: mdns_sd::Receiver<ServiceEvent>, tx: mpsc::Sender<DiscoveryEvent>, own_id: String| {
+            thread::spawn(move || {
+                let mut known_peers = HashMap::new();
 
-            while let Ok(event) = receiver.recv() {
-                match event {
-                    ServiceEvent::ServiceResolved(info) => {
-                        log::info!("[mDNS] ServiceResolved: {:?}", info.get_fullname());
-                        if let Some(pid) = info.get_property_val_str("peer_id") {
-                            if pid != own_peer_id {
-                                let device_name = info
-                                    .get_property_val_str("device_name")
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| info.get_fullname().to_string());
+                while let Ok(event) = rec.recv() {
+                    match event {
+                        ServiceEvent::ServiceResolved(info) => {
+                            log::info!("[mDNS] ServiceResolved: {:?}", info.get_fullname());
+                            if let Some(pid) = info.get_property_val_str("peer_id") {
+                                if pid != own_id {
+                                    let device_name = info
+                                        .get_property_val_str("device_name")
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| info.get_fullname().to_string());
 
-                                let mut addresses: Vec<String> = info
-                                    .get_addresses()
-                                    .iter()
-                                    .map(|ip| ip.to_string())
-                                    .collect();
+                                    let mut addresses: Vec<String> = info
+                                        .get_addresses()
+                                        .iter()
+                                        .map(|ip| ip.to_string())
+                                        .collect();
 
-                                // If mDNS A-record resolution returned empty or only IPv6, check TXT lan_ip
-                                if let Some(lan_ip) = info.get_property_val_str("lan_ip") {
-                                    if !addresses.contains(&lan_ip.to_string()) {
-                                        addresses.insert(0, lan_ip.to_string());
+                                    if let Some(lan_ip) = info.get_property_val_str("lan_ip") {
+                                        if !addresses.contains(&lan_ip.to_string()) {
+                                            addresses.insert(0, lan_ip.to_string());
+                                        }
+                                    }
+
+                                    let peer = DiscoveredPeer {
+                                        peer_id: pid.to_string(),
+                                        device_name,
+                                        addresses,
+                                        port: info.get_port(),
+                                    };
+
+                                    known_peers
+                                        .insert(info.get_fullname().to_string(), pid.to_string());
+
+                                    log::info!("[mDNS] Discovered remote peer: {} ({:?})", peer.device_name, peer.addresses);
+
+                                    if tx.blocking_send(DiscoveryEvent::PeerFound(peer)).is_err() {
+                                        break;
                                     }
                                 }
-
-                                let peer = DiscoveredPeer {
-                                    peer_id: pid.to_string(),
-                                    device_name,
-                                    addresses,
-                                    port: info.get_port(),
-                                };
-
-                                known_peers
-                                    .insert(info.get_fullname().to_string(), pid.to_string());
-
-                                log::info!("[mDNS] Discovered remote peer: {} ({:?})", peer.device_name, peer.addresses);
-
-                                if tx.blocking_send(DiscoveryEvent::PeerFound(peer)).is_err() {
+                            }
+                        }
+                        ServiceEvent::ServiceFound(service_type, fullname) => {
+                            log::debug!("[mDNS] ServiceFound: {} ({})", fullname, service_type);
+                        }
+                        ServiceEvent::ServiceRemoved(_ty, fullname) => {
+                            log::info!("[mDNS] ServiceRemoved: {}", fullname);
+                            if let Some(pid) = known_peers.remove(&fullname) {
+                                if tx.blocking_send(DiscoveryEvent::PeerLost(pid)).is_err() {
                                     break;
                                 }
                             }
                         }
+                        _ => {}
                     }
-                    ServiceEvent::ServiceFound(service_type, fullname) => {
-                        log::debug!("[mDNS] ServiceFound: {} ({})", fullname, service_type);
-                    }
-                    ServiceEvent::ServiceRemoved(_ty, fullname) => {
-                        log::info!("[mDNS] ServiceRemoved: {}", fullname);
-                        if let Some(pid) = known_peers.remove(&fullname) {
-                            if tx.blocking_send(DiscoveryEvent::PeerLost(pid)).is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            }
-        });
+            });
+        };
+
+        spawn_listener(receiver, tx.clone(), own_peer_id.clone());
+        if let Some(lrec) = legacy_receiver {
+            spawn_listener(lrec, tx, own_peer_id);
+        }
 
         Ok(rx)
     }
@@ -216,6 +225,7 @@ impl MdnsHandle {
     pub fn stop_browsing(&mut self) -> Result<(), DiscoveryError> {
         if self.is_browsing {
             let _ = self.daemon.stop_browse(SERVICE_TYPE);
+            let _ = self.daemon.stop_browse(LEGACY_SERVICE_TYPE);
             self.is_browsing = false;
         }
         Ok(())

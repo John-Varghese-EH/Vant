@@ -24,7 +24,7 @@ fn default_max_context_tokens() -> u32 {
     4096
 }
 fn default_api_proxy_port() -> u16 {
-    8787
+    11434
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

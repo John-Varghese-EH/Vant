@@ -52,7 +52,7 @@ export function usePairing() {
       const updated = await getPairingState();
       setState(updated);
     } catch (err: any) {
-      console.error('[GhostCompute Debug] Initiate pairing failed:', err);
+      console.error('[Vant Debug] Initiate pairing failed:', err);
       setState({ Failed: { reason: typeof err === 'string' ? err : err?.message || 'Pairing failed' } });
       throw err;
     }
@@ -64,7 +64,7 @@ export function usePairing() {
       const updated = await getPairingState();
       setState(updated);
     } catch (err: any) {
-      console.error('[GhostCompute Debug] Confirm pairing failed:', err);
+      console.error('[Vant Debug] Confirm pairing failed:', err);
     }
   }, []);
 
@@ -80,7 +80,7 @@ export function usePairing() {
       const updated = await getPairingState();
       setState(updated);
     } catch (err: any) {
-      console.error('[GhostCompute Debug] Submit code failed:', err);
+      console.error('[Vant Debug] Submit code failed:', err);
       setState({ Failed: { reason: typeof err === 'string' ? err : err?.message || 'Invalid code' } });
       throw err;
     }
@@ -92,15 +92,15 @@ export function usePairing() {
   }, []);
 
   const connectToUrl = useCallback(async (url: string) => {
-    console.log('[GhostCompute Debug] Attempting connection to host:', url);
+    console.log('[Vant Debug] Attempting connection to host:', url);
     setState('Discovering');
     try {
       await invokeConnectToUrl(url);
-      console.log('[GhostCompute Debug] Connected successfully to host:', url);
+      console.log('[Vant Debug] Connected successfully to host:', url);
       const updated = await getPairingState();
       setState(updated);
     } catch (err: any) {
-      console.error('[GhostCompute Debug] Connection failed with error:', err);
+      console.error('[Vant Debug] Connection failed with error:', err);
       setState({ Failed: { reason: typeof err === 'string' ? err : err?.message || 'Connection failed' } });
       throw err;
     }

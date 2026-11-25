@@ -39,10 +39,10 @@ export function useConnection() {
     try {
       setStatus({ Connecting: null });
       await invokeConnectToHost(peerId);
-      // Wait for the polling to pick up the final Connected state
     } catch (err) {
       console.error('Connect failed:', err);
       setStatus({ Disconnected: null });
+      throw err;
     }
   }, []);
 

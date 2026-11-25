@@ -51,6 +51,8 @@ impl From<&str> for UserRole {
 pub struct TrustedPeer {
     pub peer_id: String,
     pub device_name: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
     pub noise_public_key: String,
     pub paired_at: String,
     pub last_seen: Option<String>,
@@ -74,6 +76,7 @@ impl PeerStore {
             "CREATE TABLE IF NOT EXISTS peers(
                 peer_id TEXT PRIMARY KEY,
                 device_name TEXT NOT NULL,
+                nickname TEXT,
                 noise_public_key TEXT NOT NULL,
                 paired_at TEXT NOT NULL,
                 last_seen TEXT,
@@ -89,6 +92,7 @@ impl PeerStore {
         let _ = conn.execute("ALTER TABLE peers ADD COLUMN role TEXT DEFAULT 'developer'", []);
         let _ = conn.execute("ALTER TABLE peers ADD COLUMN api_token TEXT", []);
         let _ = conn.execute("ALTER TABLE peers ADD COLUMN rate_limit_rpm INTEGER DEFAULT 60", []);
+        let _ = conn.execute("ALTER TABLE peers ADD COLUMN nickname TEXT", []);
 
         Ok(Self { conn })
     }
@@ -138,8 +142,26 @@ impl PeerStore {
         Ok(())
     }
 
+    pub fn set_nickname(
+        &self,
+        peer_id: &str,
+        nickname: Option<&str>,
+    ) -> Result<(), PeerStoreError> {
+        let cleaned = nickname
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let updated = self.conn.execute(
+            "UPDATE peers SET nickname = ?1 WHERE peer_id = ?2",
+            params![cleaned, peer_id],
+        )?;
+        if updated == 0 {
+            return Err(PeerStoreError::NotFound(peer_id.to_string()));
+        }
+        Ok(())
+    }
+
     pub fn generate_api_token(&self, peer_id: &str) -> Result<String, PeerStoreError> {
-        let token = format!("gc_live_{}", uuid::Uuid::new_v4().simple());
+        let token = format!("vant_live_{}", uuid::Uuid::new_v4().simple());
         let updated = self.conn.execute(
             "UPDATE peers SET api_token = ?1 WHERE peer_id = ?2",
             params![token, peer_id],
@@ -152,23 +174,24 @@ impl PeerStore {
 
     pub fn get_peer(&self, peer_id: &str) -> Result<Option<TrustedPeer>, PeerStoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT peer_id, device_name, noise_public_key, paired_at, last_seen, revoked, role, api_token, rate_limit_rpm 
+            "SELECT peer_id, device_name, nickname, noise_public_key, paired_at, last_seen, revoked, role, api_token, rate_limit_rpm 
              FROM peers WHERE peer_id = ?1",
         )?;
 
         let peer = stmt
             .query_row(params![peer_id], |row| {
-                let role_str: String = row.get(6).unwrap_or_else(|_| "developer".to_string());
+                let role_str: String = row.get(7).unwrap_or_else(|_| "developer".to_string());
                 Ok(TrustedPeer {
                     peer_id: row.get(0)?,
                     device_name: row.get(1)?,
-                    noise_public_key: row.get(2)?,
-                    paired_at: row.get(3)?,
-                    last_seen: row.get(4)?,
-                    revoked: row.get::<_, i32>(5)? != 0,
+                    nickname: row.get(2)?,
+                    noise_public_key: row.get(3)?,
+                    paired_at: row.get(4)?,
+                    last_seen: row.get(5)?,
+                    revoked: row.get::<_, i32>(6)? != 0,
                     role: UserRole::from(role_str.as_str()),
-                    api_token: row.get(7)?,
-                    rate_limit_rpm: row.get::<_, u32>(8).unwrap_or(60),
+                    api_token: row.get(8)?,
+                    rate_limit_rpm: row.get::<_, u32>(9).unwrap_or(60),
                 })
             })
             .optional()?;
@@ -178,22 +201,23 @@ impl PeerStore {
 
     pub fn list_peers(&self) -> Result<Vec<TrustedPeer>, PeerStoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT peer_id, device_name, noise_public_key, paired_at, last_seen, revoked, role, api_token, rate_limit_rpm 
+            "SELECT peer_id, device_name, nickname, noise_public_key, paired_at, last_seen, revoked, role, api_token, rate_limit_rpm 
              FROM peers",
         )?;
 
         let peer_iter = stmt.query_map([], |row| {
-            let role_str: String = row.get(6).unwrap_or_else(|_| "developer".to_string());
+            let role_str: String = row.get(7).unwrap_or_else(|_| "developer".to_string());
             Ok(TrustedPeer {
                 peer_id: row.get(0)?,
                 device_name: row.get(1)?,
-                noise_public_key: row.get(2)?,
-                paired_at: row.get(3)?,
-                last_seen: row.get(4)?,
-                revoked: row.get::<_, i32>(5)? != 0,
+                nickname: row.get(2)?,
+                noise_public_key: row.get(3)?,
+                paired_at: row.get(4)?,
+                last_seen: row.get(5)?,
+                revoked: row.get::<_, i32>(6)? != 0,
                 role: UserRole::from(role_str.as_str()),
-                api_token: row.get(7)?,
-                rate_limit_rpm: row.get::<_, u32>(8).unwrap_or(60),
+                api_token: row.get(8)?,
+                rate_limit_rpm: row.get::<_, u32>(9).unwrap_or(60),
             })
         })?;
 

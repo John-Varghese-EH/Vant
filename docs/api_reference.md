@@ -1,10 +1,10 @@
 # API Reference (OpenAI Compatibility)
 
-GhostCompute is designed to act as a seamless drop-in replacement for any tool expecting an OpenAI-compatible endpoint.
+Vant is designed to act as a seamless drop-in replacement for any tool expecting an OpenAI-compatible endpoint.
 
 ## Endpoint Base URL
 
-When pointing your tools (Cursor, Claude Code, Cline, etc.) to GhostCompute, use the following base URL:
+When pointing your tools (Cursor, Claude Code, Cline, etc.) to Vant, use the following base URL:
 
 ```
 http://127.0.0.1:11434/v1
@@ -15,7 +15,7 @@ http://127.0.0.1:11434/v1
 ### 1. `GET /v1/models`
 Retrieves the list of available models. 
 - **Behavior**: Aggregates models from your Host's local Ollama instance over the P2P tunnel, and optionally appends cloud models (Gemini, Groq) if you have provided API keys in your settings.
-- **Disconnected Behavior**: If the Host is offline, GhostCompute will still successfully return your configured Cloud models.
+- **Disconnected Behavior**: If the Host is offline, Vant will still successfully return your configured Cloud models.
 
 ### 2. `POST /v1/chat/completions`
 The standard chat completions endpoint. 
@@ -25,4 +25,4 @@ The standard chat completions endpoint.
 ### Model Prefixing
 - **Ollama**: Use native model names (e.g., `llama3.1`, `qwen2.5-coder`).
 - **Gemini**: Use native model names (e.g., `gemini-1.5-pro`, `gemini-1.5-flash`).
-- **Groq**: Prefix Groq models with `groq:` (e.g., `groq:llama3-70b-8192`, `groq:mixtral-8x7b-32768`). GhostCompute automatically strips the prefix before sending the payload to Groq.
+- **Groq**: Prefix Groq models with `groq:` (e.g., `groq:llama3-70b-8192`, `groq:mixtral-8x7b-32768`). Vant automatically strips the prefix before sending the payload to Groq.

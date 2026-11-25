@@ -8,9 +8,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const [phase, setPhase] = useState<'entering' | 'visible' | 'exiting'>('entering');
 
   useEffect(() => {
-    const enterTimer = setTimeout(() => setPhase('visible'), 50);
-    const exitTimer = setTimeout(() => setPhase('exiting'), 2200);
-    const unmountTimer = setTimeout(() => onComplete(), 3000);
+    const enterTimer = setTimeout(() => setPhase('visible'), 30);
+    const exitTimer = setTimeout(() => setPhase('exiting'), 950);
+    const unmountTimer = setTimeout(() => onComplete(), 1400);
 
     return () => {
       clearTimeout(enterTimer);
@@ -19,88 +19,117 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
     };
   }, [onComplete]);
 
+  const dismissNow = () => {
+    setPhase('exiting');
+    setTimeout(onComplete, 250);
+  };
+
   const isVisible = phase === 'visible';
   const isExiting = phase === 'exiting';
 
   return (
-    <div 
-      className="flex flex-col items-center justify-center" 
-      style={{ 
+    <div
+      onClick={dismissNow}
+      className="flex flex-col items-center justify-center cursor-pointer"
+      style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: '#000000', // Pure black for true premium feel
+        backgroundColor: '#040407',
         zIndex: 99999,
         opacity: isExiting ? 0 : 1,
-        transition: 'opacity 0.8s cubic-bezier(0.65, 0, 0.35, 1)',
-        pointerEvents: isExiting ? 'none' : 'auto'
+        transition: 'opacity 0.45s cubic-bezier(0.32, 0.72, 0, 1)',
+        pointerEvents: isExiting ? 'none' : 'auto',
       }}
     >
-      {/* Main Logo & Title */}
-      <div 
-        className="flex flex-col items-center" 
-        style={{ 
+      {/* Ambient Radial Aura */}
+      <div
+        className="absolute w-[420px] h-[420px] rounded-full pointer-events-none"
+        style={{
+          background: 'radial-gradient(circle, rgba(139, 92, 246, 0.16) 0%, transparent 70%)',
           opacity: isVisible && !isExiting ? 1 : 0,
-          transform: isVisible && !isExiting ? 'scale(1)' : 'scale(0.95)',
-          transition: 'opacity 1s cubic-bezier(0.16, 1, 0.3, 1), transform 1.2s cubic-bezier(0.16, 1, 0.3, 1)',
-          gap: '28px'
+          transition: 'opacity 0.6s ease',
+        }}
+      />
+
+      {/* Main Logo & Title */}
+      <div
+        className="flex flex-col items-center relative z-10"
+        style={{
+          opacity: isVisible && !isExiting ? 1 : 0,
+          transform: isVisible && !isExiting ? 'scale(1) translateY(0)' : 'scale(0.96) translateY(4px)',
+          transition:
+            'opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1), transform 0.65s cubic-bezier(0.16, 1, 0.3, 1)',
+          gap: '20px',
         }}
       >
-        <img 
-          src="/logo.svg" 
-          alt="GhostCompute 👻" 
-          className="w-20 h-20 object-contain drop-shadow-[0_0_36px_rgba(139,92,246,0.65)] select-none" 
-        />
-        <h1 style={{ 
-          fontSize: '22px', 
-          fontWeight: 500, 
-          letterSpacing: '0.04em',
-          color: '#ffffff',
-          fontFamily: 'var(--gc-font-ui)'
-        }}>
-          GhostCompute
-        </h1>
+        <div className="relative">
+          <div className="absolute -inset-2 rounded-full bg-violet-500/20 blur-2xl opacity-75 pointer-events-none" />
+          <img
+            src="/Vant_logo-icon.png"
+            alt="Vant"
+            className="relative w-24 h-24 object-contain select-none"
+          />
+        </div>
+        <div className="flex flex-col items-center gap-1.5">
+          <h1
+            style={{
+              fontSize: '28px',
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              color: '#ffffff',
+              fontFamily: 'var(--font-sans, "Plus Jakarta Sans", sans-serif)',
+            }}
+          >
+            Vant
+          </h1>
+          <p
+            style={{
+              fontSize: '10.5px',
+              fontWeight: 600,
+              letterSpacing: '0.2em',
+              textTransform: 'uppercase',
+              color: '#a1a1aa',
+            }}
+          >
+            Distributed GPU &amp; AI Compute Mesh
+          </p>
+        </div>
       </div>
 
       {/* Credits */}
-      <div 
-        className="flex flex-col items-end" 
-        style={{ 
-          position: 'absolute', 
-          bottom: '40px',
-          right: '48px',
+      <div
+        className="flex flex-col items-end"
+        style={{
+          position: 'absolute',
+          bottom: '36px',
+          right: '44px',
           opacity: isVisible && !isExiting ? 1 : 0,
-          transform: isVisible && !isExiting ? 'translateY(0)' : 'translateY(10px)',
-          transition: 'all 1s cubic-bezier(0.16, 1, 0.3, 1) 0.3s',
-          gap: '6px',
-          textAlign: 'right'
+          transform: isVisible && !isExiting ? 'translateY(0)' : 'translateY(8px)',
+          transition: 'all 0.55s cubic-bezier(0.16, 1, 0.3, 1) 0.12s',
+          gap: '4px',
+          textAlign: 'right',
         }}
       >
-        <span style={{ 
-          fontSize: '11px', 
-          fontWeight: 600, 
-          color: '#a1a1aa',
-          letterSpacing: '0.15em',
-          textTransform: 'uppercase',
-          marginBottom: '2px'
-        }}>
+        <span
+          style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            color: '#a1a1aa',
+            letterSpacing: '0.15em',
+            textTransform: 'uppercase',
+          }}
+        >
           JOHN VARGHESE (J0X)
         </span>
-        <span style={{ 
-          fontSize: '10px', 
-          fontWeight: 500, 
-          color: '#71717a',
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase'
-        }}>
-          LINKEDIN: /IN/JOHN--VARGHESE
-        </span>
-        <span style={{ 
-          fontSize: '10px', 
-          fontWeight: 500, 
-          color: '#71717a',
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase'
-        }}>
+        <span
+          style={{
+            fontSize: '10px',
+            fontWeight: 500,
+            color: '#71717a',
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+          }}
+        >
           GITHUB: JOHN-VARGHESE-EH
         </span>
       </div>

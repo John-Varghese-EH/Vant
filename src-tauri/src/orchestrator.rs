@@ -139,8 +139,12 @@ impl Orchestrator {
         }
 
         // 2. Containerized / Docker check
-        let container_name = format!("ghostcompute-{}", recipe_id);
-        let inspected = DockerManager::inspect_container(&container_name).await?;
+        let vant_name = format!("vant-{}", recipe_id);
+        let ghost_name = format!("ghostcompute-{}", recipe_id);
+        let inspected = match DockerManager::inspect_container(&vant_name).await? {
+            Some(c) => Some(c),
+            None => DockerManager::inspect_container(&ghost_name).await?,
+        };
 
         let mut states = self.states.lock().await;
         if let Some(state) = states.get_mut(recipe_id) {
@@ -309,7 +313,7 @@ impl Orchestrator {
 
         // Docker Compose projects (ComfyUI, Dify, Open WebUI with compose, etc.)
         if let Some(ref compose_tmpl) = recipe.compose_template {
-            let project_name = format!("ghostcompute-{}", recipe.id);
+            let project_name = format!("vant-{}", recipe.id);
             if let Err(e) = DockerManager::compose_up(&project_name, compose_tmpl, &service_dir).await {
                 let mut states = self.states.lock().await;
                 if let Some(state) = states.get_mut(recipe_id) {
@@ -320,7 +324,7 @@ impl Orchestrator {
             }
         } else if let Some(ref image) = recipe.docker_image {
             // Docker single container fallback
-            let container_name = format!("ghostcompute-{}", recipe.id);
+            let container_name = format!("vant-{}", recipe.id);
             let mut cmd = tokio::process::Command::new("docker");
             cmd.args(["run", "-d", "--name", &container_name]);
 
@@ -373,8 +377,10 @@ impl Orchestrator {
             .ok_or_else(|| format!("Unknown recipe: {}", recipe_id))?;
 
         let service_dir = self.data_dir.join("services").join(&recipe.id);
-        let project_name = format!("ghostcompute-{}", recipe.id);
-        let container_name = format!("ghostcompute-{}", recipe.id);
+        let project_name = format!("vant-{}", recipe.id);
+        let container_name = format!("vant-{}", recipe.id);
+        let legacy_project_name = format!("ghostcompute-{}", recipe.id);
+        let legacy_container_name = format!("ghostcompute-{}", recipe.id);
 
         if recipe.deployment == crate::recipes::DeploymentMethod::NativeBinary {
             // For native binaries like Ollama or LM Studio, mark as stopped
@@ -387,8 +393,10 @@ impl Orchestrator {
 
         if recipe.compose_template.is_some() {
             let _ = DockerManager::compose_down(&project_name, &service_dir).await;
+            let _ = DockerManager::compose_down(&legacy_project_name, &service_dir).await;
         } else {
             let _ = DockerManager::stop_container(&container_name).await;
+            let _ = DockerManager::stop_container(&legacy_container_name).await;
         }
 
         let mut states = self.states.lock().await;
@@ -403,11 +411,17 @@ impl Orchestrator {
         let recipe = self.recipes.get(recipe_id);
         if let Some(r) = recipe {
             if r.deployment == crate::recipes::DeploymentMethod::NativeBinary {
-                return Ok(format!("[GhostCompute] {} runs as a native system service. Consult system/terminal logs or launch console.", r.name));
+                return Ok(format!("[Vant] {} runs as a native system service. Consult system/terminal logs or launch console.", r.name));
             }
         }
-        let container_name = format!("ghostcompute-{}", recipe_id);
-        DockerManager::container_logs(&container_name, tail).await
+        let container_name = format!("vant-{}", recipe_id);
+        match DockerManager::container_logs(&container_name, tail).await {
+            Ok(logs) if !logs.trim().is_empty() => Ok(logs),
+            _ => {
+                let legacy_name = format!("ghostcompute-{}", recipe_id);
+                DockerManager::container_logs(&legacy_name, tail).await
+            }
+        }
     }
 }
 

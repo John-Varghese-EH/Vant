@@ -85,7 +85,7 @@ pub fn generate_pairing_link(host_url: Option<String>) -> PairingLink {
     let url = if let Some(base_url) = host_url {
         format!("{}?token={}", base_url, token)
     } else {
-        format!("ghostcompute://pair/{}", token)
+        format!("vant://pair/{}", token)
     };
     
     let expires_at = Utc::now() + Duration::hours(24);

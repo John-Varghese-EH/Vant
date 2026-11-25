@@ -31,7 +31,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     this.setState({ errorInfo });
-    console.error(`[GhostCompute ErrorBoundary${this.props.scope ? ` - ${this.props.scope}` : ''}]:`, error, errorInfo);
+    console.error(`[Vant ErrorBoundary${this.props.scope ? ` - ${this.props.scope}` : ''}]:`, error, errorInfo);
   }
 
   private handleReset = (): void => {
@@ -48,7 +48,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   private handleCopyError = (): void => {
     const { error, errorInfo } = this.state;
     const details = [
-      `GhostCompute Error Report`,
+      `Vant Error Report`,
       `Timestamp: ${new Date().toISOString()}`,
       `Scope: ${this.props.scope || 'Root'}`,
       `Message: ${error?.message || 'Unknown error'}`,
@@ -88,7 +88,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                     {this.props.title || 'Component Error Intercepted'}
                   </h3>
                   <p className="text-xs text-[var(--gc-text-muted)] mt-1 leading-relaxed">
-                    GhostCompute caught an unhandled exception in {this.props.scope || 'the application tree'}. Your background daemon and configuration remain safe.
+                    Vant caught an unhandled exception in {this.props.scope || 'the application tree'}. Your background daemon and configuration remain safe.
                   </p>
                 </div>
               </div>

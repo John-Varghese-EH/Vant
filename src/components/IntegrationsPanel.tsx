@@ -6,8 +6,10 @@ import { Button } from './common/Button';
 import { Badge } from './common/Badge';
 import { StatusDot } from './common/StatusDot';
 import { EmptyState } from './common/EmptyState';
+import { useToast } from './common/Toast';
 
 export const IntegrationsPanel: React.FC = () => {
+  const toast = useToast();
   const { status, start, stop } = useApiProxy();
   const { settings } = useSettings();
   const [showKey, setShowKey] = useState(false);
@@ -28,6 +30,7 @@ export const IntegrationsPanel: React.FC = () => {
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
+    toast.success('Copied to clipboard');
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -50,14 +53,19 @@ export const IntegrationsPanel: React.FC = () => {
         const count = Array.isArray(json?.data) ? json.data.length : 1;
         setTestResult({ status: res.status, latencyMs, modelsCount: count });
         setTestState('success');
+        toast.success('Gateway diagnostic passed', `${count} model(s) ready in ${latencyMs}ms`);
       } else {
-        setTestResult({ status: res.status, latencyMs, modelsCount: 0, errorMsg: `HTTP ${res.status} ${res.statusText}` });
+        const msg = `HTTP ${res.status} ${res.statusText}`;
+        setTestResult({ status: res.status, latencyMs, modelsCount: 0, errorMsg: msg });
         setTestState('error');
+        toast.error('Gateway diagnostic failed', msg);
       }
     } catch (e: any) {
       const latencyMs = Math.round(performance.now() - startTime);
-      setTestResult({ status: 0, latencyMs, modelsCount: 0, errorMsg: e?.message || 'Connection refused' });
+      const msg = e?.message || 'Connection refused';
+      setTestResult({ status: 0, latencyMs, modelsCount: 0, errorMsg: msg });
       setTestState('error');
+      toast.error('Gateway diagnostic failed', msg);
     }
   };
 
@@ -78,9 +86,9 @@ export const IntegrationsPanel: React.FC = () => {
       icon: <Icon name="refresh" size={20} className="text-accent" />,
       description: 'Open-source VS Code & JetBrains AI copilot extension',
       config: `{
-  "title": "GhostCompute Local",
+  "title": "Vant Local Gateway",
   "provider": "openai",
-  "model": "ghost-remote",
+  "model": "vant-remote",
   "apiBase": "http://localhost:${status.port}/v1"
 }`,
       instructions: 'Add this block to your Continue config.json providers array.'
@@ -109,10 +117,10 @@ export const IntegrationsPanel: React.FC = () => {
       icon: <Icon name="psychology" size={20} className="text-accent" />,
       description: 'Official and community OpenAI command-line developer utilities',
       config: shellMode === 'powershell'
-        ? `$env:OPENAI_BASE_URL = "http://localhost:${status.port}/v1"\n$env:OPENAI_API_KEY = "${settings.api_proxy_key || 'sk-ghostcompute'}"`
+        ? `$env:OPENAI_BASE_URL = "http://localhost:${status.port}/v1"\n$env:OPENAI_API_KEY = "${settings.api_proxy_key || 'sk-vant'}"`
         : shellMode === 'cmd'
-        ? `set OPENAI_BASE_URL=http://localhost:${status.port}/v1\nset OPENAI_API_KEY=${settings.api_proxy_key || 'sk-ghostcompute'}`
-        : `export OPENAI_BASE_URL="http://localhost:${status.port}/v1"\nexport OPENAI_API_KEY="${settings.api_proxy_key || 'sk-ghostcompute'}"`,
+        ? `set OPENAI_BASE_URL=http://localhost:${status.port}/v1\nset OPENAI_API_KEY=${settings.api_proxy_key || 'sk-vant'}`
+        : `export OPENAI_BASE_URL="http://localhost:${status.port}/v1"\nexport OPENAI_API_KEY="${settings.api_proxy_key || 'sk-vant'}"`,
       instructions: shellMode === 'powershell'
         ? 'Run in PowerShell before invoking OpenAI CLI tools.'
         : shellMode === 'cmd'
@@ -414,7 +422,7 @@ ${settings.api_proxy_key ? `  -H "Authorization: Bearer ${settings.api_proxy_key
                   border: '1px solid var(--gc-border)',
                   overflowX: 'auto'
                 }}>
-                  <pre className="text-mono" style={{ margin: 0, fontSize: '12px', whiteSpace: 'pre-wrap', color: '#e4e4e7' }}>
+                  <pre className="text-mono" style={{ margin: 0, fontSize: '12px', whiteSpace: 'pre-wrap', color: 'var(--gc-text)' }}>
                     {integration.config}
                   </pre>
                 </div>

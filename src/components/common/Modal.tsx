@@ -34,16 +34,16 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, children, fo
       ref={dialogRef}
       onClose={onClose}
       onClick={handleBackdropClick}
-      className="glass-panel"
+      className="glass-panel animate-fade-in"
       style={{
         margin: 'auto',
         padding: 0,
-        backgroundColor: 'rgba(20, 20, 23, 0.92)',
+        backgroundColor: 'var(--gc-surface)',
         color: 'var(--gc-text)',
-        border: '1px solid var(--gc-border)',
-        borderRadius: 'var(--gc-radius-lg)',
-        width: '100%',
-        maxWidth: '440px',
+        border: '1px solid var(--gc-border-light)',
+        borderRadius: 'var(--gc-radius-xl)',
+        width: 'calc(100% - 2rem)',
+        maxWidth: '460px',
         boxShadow: 'var(--gc-shadow-lg)',
         outline: 'none',
       }}

@@ -30,6 +30,7 @@ pub enum ServerError {
 pub struct SessionInfo {
     pub peer_id: String,
     pub device_name: String,
+    pub nickname: Option<String>,
     pub connected_at: String,
     pub active: bool,
 }
@@ -149,6 +150,7 @@ impl HostServer {
                                                 let info = SessionInfo {
                                                     peer_id: peer_id.clone(),
                                                     device_name: addr.to_string(),
+                                                    nickname: None,
                                                     connected_at: chrono::Utc::now().to_rfc3339(),
                                                     active: true,
                                                 };
@@ -302,6 +304,11 @@ impl HostServer {
                                                                             let _ = tx_out.send(b"{\"error\":\"Not paired\",\"done\":true}".to_vec()).await;
                                                                             break;
                                                                         }
+                                                                        if action == "ping" {
+                                                                            let _ = tx_out.send(b"{\"action\":\"pong\"}".to_vec()).await;
+                                                                            continue;
+                                                                        }
+
                                                                         if action == "get_sys_stats" {
                                                                             let stats = crate::sys_monitor::get_system_stats();
                                                                             if let Ok(json) = serde_json::to_vec(&serde_json::json!({
@@ -317,9 +324,10 @@ impl HostServer {
                                                                             if let Ok(proxy_req) = serde_json::from_value::<HttpProxyRequest>(parsed) {
                                                                                 let tx_out_clone = tx_out.clone();
                                                                                 let owned_permit = admission_gate.acquire_owned().await.ok();
+                                                                                let dest_port = proxy_req.target_port.unwrap_or(11434);
                                                                                 tokio::spawn(async move {
                                                                                     let _held_permit = owned_permit;
-                                                                                    let target_url = format!("http://127.0.0.1:11434{}", proxy_req.path);
+                                                                                    let target_url = format!("http://127.0.0.1:{}{}", dest_port, proxy_req.path);
                                                                                 
                                                                                 let client = reqwest::Client::new();
                                                                                 let mut req_builder = client.request(
@@ -460,10 +468,14 @@ impl HostServer {
             let _ = child.kill().await;
         }
 
+        let _ = app_handle.emit("tunnel-status", "Checking cloudflared runtime...");
+
         // Ensure cloudflared binary is available
         let cf_bin = crate::cloudflared_manager::ensure_cloudflared(app_handle)
             .await
             .map_err(|e| format!("Failed to find or download cloudflared: {}", e))?;
+
+        let _ = app_handle.emit("tunnel-status", "Connecting to Cloudflare edge...");
 
         let mut cmd = Command::new(&cf_bin);
 
@@ -529,28 +541,42 @@ impl HostServer {
         let app_handle_clone = app_handle.clone();
         tokio::spawn(async move {
             use tauri::Manager;
+            let mut emitted_url = false;
+            let mut emitted_explicit_err = false;
             while let Some(line) = rx_line.recv().await {
                 if line.contains(".trycloudflare.com") {
                     for raw_word in line.split_whitespace() {
                         let word = raw_word.trim_matches(|c| c == '|' || c == ' ' || c == '\t' || c == ',' || c == '"' || c == '\'');
                         if word.starts_with("https://") && word.contains(".trycloudflare.com") {
                             log::info!("[Tunnel] Extracted free Cloudflare quick tunnel URL: {}", word);
-                            let _ = app_handle_clone.emit("tunnel-url-ready", word.to_string());
+                            emitted_url = true;
                             if let Some(app_state) = app_handle_clone.try_state::<crate::AppState>() {
                                 let mut tunnel_lock = app_state.active_tunnel_url.lock().await;
                                 *tunnel_lock = Some(word.to_string());
                             }
+                            let _ = app_handle_clone.emit("tunnel-url-ready", word.to_string());
                             break;
                         }
                     }
-                } else if line.contains("Tunnelstore request failed") || line.contains("provisioning failed") {
+                } else if line.contains("Tunnelstore request failed")
+                    || line.contains("provisioning failed")
+                    || line.contains("failed to request quick Tunnel")
+                    || line.contains("context deadline exceeded")
+                {
                     log::warn!("[Tunnel] Cloudflare rate limit or provisioning failure: {}", line);
-                    let _ = app_handle_clone.emit("tunnel-error", "Cloudflare Quick Tunnel busy or provisioning rate-limited. Click 'Restart Tunnel' to retry.");
+                    emitted_explicit_err = true;
+                    let _ = app_handle_clone.emit("tunnel-error", "Cloudflare Quick Tunnel busy or timed out. Click Restart to retry.");
                 }
             }
 
             // Stream closed: cloudflared terminated or went down
             log::info!("[Tunnel] Cloudflared process stream closed. Tunnel is down.");
+            if !emitted_url && !emitted_explicit_err {
+                let _ = app_handle_clone.emit(
+                    "tunnel-error",
+                    "Cloudflare Quick Tunnel exited before registering a public URL. Check internet connectivity or retry.",
+                );
+            }
             if let Some(app_state) = app_handle_clone.try_state::<crate::AppState>() {
                 let mut tunnel_lock = app_state.active_tunnel_url.lock().await;
                 *tunnel_lock = None;
@@ -564,6 +590,13 @@ impl HostServer {
         Ok(())
     }
 
+    pub async fn stop_tunnel(&mut self) {
+        if let Some(mut child) = self.cloudflared_process.take() {
+            log::info!("Stopping cloudflared tunnel...");
+            let _ = child.kill().await;
+        }
+    }
+
     pub async fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
@@ -571,10 +604,7 @@ impl HostServer {
         if let Some(task) = self.listener_task.take() {
             let _ = task.await;
         }
-        if let Some(mut child) = self.cloudflared_process.take() {
-            log::info!("Killing cloudflared process...");
-            let _ = child.kill().await;
-        }
+        self.stop_tunnel().await;
         self.sessions.lock().await.clear();
         self.session_kills.lock().await.clear();
     }
@@ -607,9 +637,10 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
     let first_line = request_str.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     let method = parts.get(0).copied().unwrap_or("GET");
-    let path = parts.get(1).copied().unwrap_or("/");
+    let raw_path = parts.get(1).copied().unwrap_or("/");
+    let clean_path = raw_path.split('?').next().unwrap_or("/");
 
-    log::info!("Browser HTTP request from {}: {} {}", addr, method, path);
+    log::info!("Browser HTTP request from {}: {} {}", addr, method, clean_path);
 
     if method == "OPTIONS" {
         let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nConnection: close\r\n\r\n";
@@ -619,8 +650,8 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         return;
     }
 
-    if path == "/health" || path == "/api/health" {
-        let body = r#"{"status":"online","service":"ghostcompute","protocol":"noise_xx"}"#;
+    if clean_path == "/health" || clean_path == "/api/health" {
+        let body = r#"{"status":"online","service":"vant","legacy_service":"ghostcompute","protocol":"noise_xx"}"#;
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -632,8 +663,73 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         return;
     }
 
-    let token = if let Some(query_start) = path.find('?') {
-        let query = &path[query_start + 1..];
+    if clean_path == "/favicon.ico" {
+        const FAVICON_ICO: &[u8] = include_bytes!("../../public/favicon.ico");
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/x-icon\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+            FAVICON_ICO.len()
+        );
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket.write_all(FAVICON_ICO).await;
+        let _ = socket.flush().await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    if clean_path == "/favicon.png" {
+        const FAVICON_PNG: &[u8] = include_bytes!("../../public/favicon.png");
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+            FAVICON_PNG.len()
+        );
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket.write_all(FAVICON_PNG).await;
+        let _ = socket.flush().await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    if clean_path == "/logo.svg" || clean_path == "/favicon.svg" {
+        const LOGO_SVG: &str = include_str!("../../public/logo.svg");
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{}",
+            LOGO_SVG.len(),
+            LOGO_SVG
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+        let _ = socket.flush().await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    if clean_path == "/logo.png" || clean_path == "/apple-touch-icon.png" || clean_path == "/apple-touch-icon-precomposed.png" || clean_path == "/Vant_logo-icon.png" {
+        const LOGO_PNG: &[u8] = include_bytes!("../../public/Vant_logo-icon.png");
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+            LOGO_PNG.len()
+        );
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket.write_all(LOGO_PNG).await;
+        let _ = socket.flush().await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    if clean_path == "/robots.txt" {
+        let body = "User-agent: *\nDisallow: /\n";
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+        let _ = socket.flush().await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    let token = if let Some(query_start) = raw_path.find('?') {
+        let query = &raw_path[query_start + 1..];
         query.split('&')
             .find_map(|pair| {
                 let mut kv = pair.split('=');
@@ -654,38 +750,46 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>GhostCompute &middot; Zero-Trust Distributed AI Gateway</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%0A%20%20%3Cstyle%3E%0A%20%20%20%20%40keyframes%20gc-float%20%7B%0A%20%20%20%20%20%200%25%2C%20100%25%20%7B%20transform%3A%20translateY%280px%29%3B%20%7D%0A%20%20%20%20%20%2050%25%20%7B%20transform%3A%20translateY%28-1.5px%29%3B%20%7D%0A%20%20%20%20%7D%0A%20%20%20%20%40keyframes%20gc-sparkle%20%7B%0A%20%20%20%20%20%200%25%2C%20100%25%20%7B%20opacity%3A%200.4%3B%20transform%3A%20scale%280.8%29%20translate%280%2C%200%29%3B%20%7D%0A%20%20%20%20%20%2050%25%20%7B%20opacity%3A%200.9%3B%20transform%3A%20scale%281.2%29%20translate%280%2C%20-1px%29%3B%20%7D%0A%20%20%20%20%7D%0A%20%20%20%20.gc-ghost-body%20%7B%0A%20%20%20%20%20%20animation%3A%20gc-float%204s%20ease-in-out%20infinite%3B%0A%20%20%20%20%20%20transform-origin%3A%20center%3B%0A%20%20%20%20%20%20color%3A%20%238B5CF6%3B%0A%20%20%20%20%7D%0A%20%20%20%20.gc-sparkle-1%20%7B%0A%20%20%20%20%20%20animation%3A%20gc-sparkle%203s%20ease-in-out%20infinite%3B%0A%20%20%20%20%20%20transform-origin%3A%202px%207px%3B%0A%20%20%20%20%20%20color%3A%20%238B5CF6%3B%0A%20%20%20%20%7D%0A%20%20%20%20.gc-sparkle-2%20%7B%0A%20%20%20%20%20%20animation%3A%20gc-sparkle%203s%20ease-in-out%20infinite%201s%3B%0A%20%20%20%20%20%20transform-origin%3A%2022px%2015px%3B%0A%20%20%20%20%20%20color%3A%20%238B5CF6%3B%0A%20%20%20%20%7D%0A%20%20%20%20.gc-sparkle-3%20%7B%0A%20%20%20%20%20%20animation%3A%20gc-sparkle%203s%20ease-in-out%20infinite%202s%3B%0A%20%20%20%20%20%20transform-origin%3A%2020px%205px%3B%0A%20%20%20%20%20%20color%3A%20%238B5CF6%3B%0A%20%20%20%20%7D%0A%20%20%3C/style%3E%0A%20%20%0A%20%20%3Cg%20class%3D%22gc-ghost-body%22%3E%0A%20%20%20%20%3C%21--%20Cute%20Ghost%20Body%20with%20scalloped%20bottom%20--%3E%0A%20%20%20%20%3Cpath%20%0A%20%20%20%20%20%20d%3D%22M12%202C7.58172%202%204%205.58172%204%2010V20.5C4%2021.3284%205%2021.8284%205.58579%2021.2426L7.29289%2019.5355C7.68342%2019.145%208.31658%2019.145%208.70711%2019.5355L11.2929%2022.1213C11.6834%2022.5118%2012.3166%2022.5118%2012.7071%2022.1213L15.2929%2019.5355C15.6834%2019.145%2016.3166%2019.145%2016.7071%2019.5355L18.4142%2021.2426C19%2021.8284%2020%2021.3284%2020%2020.5V10C20%205.58172%2016.4183%202%2012%202Z%22%20%0A%20%20%20%20%20%20fill%3D%22currentColor%22%20%0A%20%20%20%20%20%20fill-opacity%3D%220.1%22%20%0A%20%20%20%20%20%20stroke%3D%22currentColor%22%20%0A%20%20%20%20%20%20stroke-width%3D%222%22%20%0A%20%20%20%20%20%20stroke-linejoin%3D%22round%22%20%0A%20%20%20%20/%3E%0A%20%20%20%20%3C%21--%20Happy%20Eyes%20--%3E%0A%20%20%20%20%3Cpath%20d%3D%22M7.5%2010Q8.5%208.5%209.5%2010%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20/%3E%0A%20%20%20%20%3Cpath%20d%3D%22M14.5%2010Q15.5%208.5%2016.5%2010%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20/%3E%0A%20%20%20%20%0A%20%20%20%20%3C%21--%20Cute%20little%20mouth%20--%3E%0A%20%20%20%20%3Cpath%20d%3D%22M11%2013Q12%2014.5%2013%2013%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20/%3E%0A%20%20%3C/g%3E%0A%0A%20%20%3C%21--%20Sparkles%20--%3E%0A%20%20%3Ccircle%20cx%3D%222%22%20cy%3D%227%22%20r%3D%221%22%20fill%3D%22currentColor%22%20class%3D%22gc-sparkle-1%22%20/%3E%0A%20%20%3Ccircle%20cx%3D%2222%22%20cy%3D%2215%22%20r%3D%221%22%20fill%3D%22currentColor%22%20class%3D%22gc-sparkle-2%22%20/%3E%0A%20%20%3Ccircle%20cx%3D%2220%22%20cy%3D%225%22%20r%3D%221.5%22%20fill%3D%22currentColor%22%20class%3D%22gc-sparkle-3%22%20/%3E%0A%3C/svg%3E">
+  <title>Vant &middot; Zero-Trust Distributed AI Gateway</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png">
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/logo.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Vant">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #050508;
-      --surface: #0a0a12;
-      --surface-elevated: #10101c;
-      --surface-subtle: #151528;
+      --surface-base: #0a0a14;
+      --surface-elevated: #11111f;
+      --surface-subtle: #16162a;
+      --surface-glass: rgba(14, 14, 25, 0.76);
       --bezel-outer: rgba(255, 255, 255, 0.05);
       --border: rgba(255, 255, 255, 0.08);
       --border-light: rgba(255, 255, 255, 0.14);
-      --border-focus: rgba(139, 92, 246, 0.7);
+      --border-focus: rgba(139, 92, 246, 0.65);
       --accent: #8b5cf6;
       --accent-hover: #7c3aed;
       --accent-light: #a78bfa;
-      --accent-muted: rgba(139, 92, 246, 0.14);
+      --accent-muted: rgba(139, 92, 246, 0.12);
       --cyan: #06b6d4;
-      --cyan-muted: rgba(6, 182, 212, 0.15);
+      --cyan-muted: rgba(6, 182, 212, 0.12);
       --success: #10b981;
       --success-muted: rgba(16, 185, 129, 0.12);
-      --text: #f0f0f5;
-      --text-muted: #888899;
-      --text-dim: #555566;
-      --ease-g2: cubic-bezier(0.32, 0.72, 0, 1);
+      --text: #f1f2f6;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --ease-fluid: cubic-bezier(0.16, 1, 0.3, 1);
       --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
-      --radius-bezel-outer: 30px;
-      --radius-bezel-inner: 24px;
-      --radius-squircle-md: 16px;
-      --radius-squircle-sm: 12px;
+      --radius-bezel-outer: 32px;
+      --radius-bezel-inner: 26px;
+      --radius-squircle-lg: 20px;
+      --radius-squircle-md: 14px;
+      --radius-squircle-sm: 10px;
       --radius-pill: 9999px;
       --mouse-x: 50vw;
       --mouse-y: 50vh;
@@ -711,12 +815,12 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       min-height: 100dvh;
       background-color: var(--bg);
       color: var(--text);
-      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Plus Jakarta Sans", system-ui, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: flex-start;
-      padding: clamp(16px, 4vh, 48px) clamp(14px, 3vw, 24px);
+      padding: clamp(20px, 4vh, 48px) clamp(16px, 3vw, 24px);
       position: relative;
       overflow-x: hidden;
       overflow-y: auto;
@@ -736,7 +840,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: opacity 0.5s cubic-bezier(0.32, 0.72, 0, 1), visibility 0.5s ease;
+      transition: opacity 0.45s cubic-bezier(0.32, 0.72, 0, 1), visibility 0.45s ease;
       pointer-events: all;
     }
     .splash-overlay.dismissed {
@@ -847,11 +951,11 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       position: relative;
       z-index: 3;
       width: 100%;
-      max-width: 630px;
+      max-width: 640px;
       margin: auto 0;
     }
 
-    /* Double-Bezel Outer Enclosure */
+    /* Apple-Grade Double-Bezel Hardware Enclosure */
     .dock-outer {
       position: relative;
       width: 100%;
@@ -860,19 +964,19 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       border-radius: var(--radius-bezel-outer);
       padding: clamp(4px, 1vw, 6px);
       box-shadow: 
-        0 24px 64px -16px rgba(0, 0, 0, 0.8),
-        0 0 40px -10px rgba(139, 92, 246, 0.16);
-      animation: springFadeIn 0.7s var(--ease-g2) both;
+        0 32px 80px -20px rgba(0, 0, 0, 0.85),
+        0 0 40px -10px rgba(139, 92, 246, 0.18);
+      animation: springFadeIn 0.6s var(--ease-fluid) both;
     }
 
     .dock-inner {
-      background: var(--surface);
+      background: var(--surface-glass);
       border: 1px solid var(--border);
       border-radius: var(--radius-bezel-inner);
       padding: clamp(20px, 4vw, 34px) clamp(16px, 3.5vw, 30px);
       box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(28px);
-      -webkit-backdrop-filter: blur(28px);
+      backdrop-filter: blur(32px) saturate(180%);
+      -webkit-backdrop-filter: blur(32px) saturate(180%);
     }
 
     @keyframes springFadeIn {
@@ -886,7 +990,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       }
     }
 
-    /* Brand Header */
+    /* Brand Header with Live Hardware Status */
     .hero-header {
       display: flex;
       align-items: center;
@@ -920,9 +1024,12 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       transform: scale(1.08) rotate(-3deg);
       border-color: rgba(167, 139, 250, 0.8);
     }
+    .ghost-avatar:active {
+      transform: scale(0.96);
+    }
 
     .title-meta h1 {
-      font-size: clamp(18px, 2.5vw, 21px);
+      font-size: clamp(18px, 2.5vw, 22px);
       font-weight: 700;
       letter-spacing: -0.025em;
       color: #ffffff;
@@ -941,13 +1048,13 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       align-items: center;
       gap: 6px;
       padding: 5px 12px;
-      border-radius: var(--radius-squircle-sm);
+      border-radius: var(--radius-pill);
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.02em;
       white-space: nowrap;
       border: 1px solid transparent;
-      transition: all 0.25s var(--ease-g2);
+      transition: all 0.25s var(--ease-fluid);
     }
 
     .squircle-badge-success {
@@ -977,7 +1084,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       }
     }
 
-    /* Auto-Redirect & State Banners */
+    /* Cryptographic State Banner */
     .state-banner {
       font-size: clamp(11.5px, 1.5vw, 12.5px);
       text-align: center;
@@ -1000,7 +1107,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       color: #6ee7b7;
     }
 
-    /* Telemetry Teleport Card (Top Priority) */
+    /* Telemetry Teleport Card with Inline Copy */
     .telemetry-card {
       background: var(--surface-elevated);
       border: 1px solid var(--border);
@@ -1009,10 +1116,10 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       margin-bottom: clamp(14px, 2vh, 20px);
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
     }
 
-    .telemetry-item {
+    .telemetry-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -1027,15 +1134,106 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       flex-shrink: 0;
     }
 
+    .telemetry-val-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .telemetry-value {
       font-family: 'JetBrains Mono', monospace;
       font-size: clamp(11px, 1.5vw, 12px);
       color: var(--accent-light);
       word-break: break-all;
-      text-align: right;
     }
 
-    /* Primary Quick Action Cluster (Top Priority) */
+    .copy-mini-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.18s var(--ease-fluid);
+      outline: none;
+    }
+    .copy-mini-btn:hover {
+      background: var(--accent-muted);
+      color: #ffffff;
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+    .copy-mini-btn:active {
+      transform: scale(0.95);
+    }
+
+    /* Modern Developer CLI Box */
+    .cli-box {
+      background: #090912;
+      border: 1px solid rgba(139, 92, 246, 0.22);
+      border-radius: var(--radius-squircle-sm);
+      padding: 10px 14px;
+      margin-bottom: clamp(14px, 2vh, 20px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .cli-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: clamp(11px, 1.5vw, 12px);
+    }
+
+    .cli-prefix {
+      color: var(--accent-light);
+      font-weight: 600;
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .cli-command {
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cli-copy-btn {
+      background: rgba(139, 92, 246, 0.14);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 6px;
+      padding: 4px 10px;
+      color: var(--accent-light);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.2s var(--ease-fluid);
+      white-space: nowrap;
+      flex-shrink: 0;
+      outline: none;
+    }
+    .cli-copy-btn:hover {
+      background: rgba(139, 92, 246, 0.25);
+      color: #ffffff;
+      border-color: rgba(139, 92, 246, 0.5);
+    }
+    .cli-copy-btn:active {
+      transform: scale(0.95);
+    }
+
+    /* Primary Quick Action Cluster with Tactile Spring */
     .actions-cluster {
       display: flex;
       flex-direction: column;
@@ -1055,18 +1253,19 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       text-decoration: none;
       cursor: pointer;
       border: 1px solid transparent;
-      transition: all 0.22s var(--ease-g2);
+      transition: all 0.22s var(--ease-fluid);
       outline: none;
       width: 100%;
     }
     .action-btn:active {
-      transform: scale(0.985);
+      transform: scale(0.975);
+      transition: transform 80ms cubic-bezier(0.2, 0, 0, 1);
     }
 
     .btn-label-group {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 9px;
     }
 
     .btn-bubble {
@@ -1084,17 +1283,17 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
     }
 
     .btn-primary {
-      background: var(--accent);
+      background: linear-gradient(135deg, #8b5cf6, #7c3aed);
       color: #ffffff;
       box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
     }
     .btn-primary:hover {
-      background: var(--accent-hover);
-      box-shadow: 0 6px 24px rgba(139, 92, 246, 0.45);
+      background: linear-gradient(135deg, #9a6dff, #8b5cf6);
+      box-shadow: 0 6px 26px rgba(139, 92, 246, 0.48);
       transform: translateY(-1px);
     }
     .btn-primary .btn-bubble {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.22);
     }
 
     .btn-secondary {
@@ -1135,8 +1334,8 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       margin-top: 1px;
     }
 
-    /* Tool Showcase & Features Section (Bottom Half) */
-    .promo-section-header {
+    /* Apple-Style 4-Card Bento Grid */
+    .bento-section-header {
       font-size: 10.5px;
       font-weight: 600;
       text-transform: uppercase;
@@ -1150,50 +1349,62 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       padding-top: clamp(14px, 2vh, 18px);
     }
 
-    .promo-grid {
+    .bento-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-      margin-bottom: clamp(14px, 2vh, 18px);
+      gap: 10px;
+      margin-bottom: clamp(14px, 2vh, 20px);
     }
-    @media (max-width: 520px) {
-      .promo-grid {
+    @media (max-width: 540px) {
+      .bento-grid {
         grid-template-columns: 1fr;
       }
     }
 
-    .feature-card {
+    .bento-card {
       background: var(--surface-elevated);
       border: 1px solid var(--border);
-      border-radius: var(--radius-squircle-sm);
-      padding: clamp(10px, 1.5vh, 14px);
+      border-radius: var(--radius-squircle-md);
+      padding: clamp(12px, 1.8vh, 16px);
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      transition: border-color 0.22s ease, background-color 0.22s ease, transform 0.22s var(--ease-g2);
+      gap: 6px;
+      transition: border-color 0.22s ease, background-color 0.22s ease, transform 0.22s var(--ease-fluid);
       cursor: default;
     }
-    .feature-card:hover {
+    .bento-card:hover {
       border-color: rgba(139, 92, 246, 0.45);
       background: var(--surface-subtle);
       transform: translateY(-2px);
     }
 
-    .promo-card-title {
-      font-size: clamp(11.5px, 1.5vw, 12.5px);
-      font-weight: 600;
-      color: #ffffff;
+    .bento-icon-bubble {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: var(--accent-muted);
+      border: 1px solid rgba(139, 92, 246, 0.25);
       display: flex;
       align-items: center;
-      gap: 6px;
-    }
-    .promo-card-desc {
-      font-size: clamp(10.5px, 1.4vw, 11px);
-      color: var(--text-muted);
-      line-height: 1.38;
+      justify-content: center;
+      color: var(--accent-light);
+      margin-bottom: 2px;
     }
 
-    /* Supported Local AI Tools Showcase Grid */
+    .bento-title {
+      font-size: clamp(12px, 1.5vw, 13px);
+      font-weight: 600;
+      color: #ffffff;
+      letter-spacing: -0.01em;
+    }
+
+    .bento-desc {
+      font-size: clamp(10.5px, 1.4vw, 11px);
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    /* Supported Local AI Tools Showcase Cloud */
     .tools-section {
       margin-bottom: clamp(14px, 2vh, 18px);
     }
@@ -1203,7 +1414,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-dim);
-      margin-bottom: 7px;
+      margin-bottom: 8px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -1211,21 +1422,21 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
     .tools-tags-container {
       display: flex;
       flex-wrap: wrap;
-      gap: 5px;
+      gap: 6px;
     }
-    .tool-tag {
-      font-size: 10px;
+    .tool-chip {
+      font-size: 10.5px;
       font-weight: 500;
-      padding: 3px 8px;
-      border-radius: 6px;
+      padding: 4px 10px;
+      border-radius: 8px;
       background: var(--surface-subtle);
       border: 1px solid var(--border);
       color: var(--text-muted);
-      transition: all 0.2s var(--ease-g2);
+      transition: all 0.2s var(--ease-fluid);
       cursor: default;
     }
-    .tool-tag:hover {
-      color: #fff;
+    .tool-chip:hover {
+      color: #ffffff;
       border-color: rgba(139, 92, 246, 0.5);
       background: var(--accent-muted);
       transform: translateY(-1px);
@@ -1253,7 +1464,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       font-size: 11px;
       color: var(--text-muted);
       text-decoration: none;
-      transition: all 0.2s var(--ease-g2);
+      transition: all 0.2s var(--ease-fluid);
     }
     .author-badge:hover {
       background: var(--accent-muted);
@@ -1298,10 +1509,10 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       .main-stage {
         margin: 0;
       }
-      .promo-grid {
+      .bento-grid {
         gap: 6px;
       }
-      .feature-card {
+      .bento-card {
         padding: 8px 10px;
       }
       .telemetry-card {
@@ -1317,64 +1528,51 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
     <div class="splash-card">
       <div class="splash-logo-container">
         <div class="splash-glow-ring"></div>
-        <svg width="72" height="72" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    @keyframes gc-float {
-      0%, 100% { transform: translateY(0px); }
-      50% { transform: translateY(-1.5px); }
-    }
-    @keyframes gc-sparkle {
-      0%, 100% { opacity: 0.4; transform: scale(0.8) translate(0, 0); }
-      50% { opacity: 0.9; transform: scale(1.2) translate(0, -1px); }
-    }
-    .gc-ghost-body {
-      animation: gc-float 4s ease-in-out infinite;
-      transform-origin: center;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-1 {
-      animation: gc-sparkle 3s ease-in-out infinite;
-      transform-origin: 2px 7px;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-2 {
-      animation: gc-sparkle 3s ease-in-out infinite 1s;
-      transform-origin: 22px 15px;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-3 {
-      animation: gc-sparkle 3s ease-in-out infinite 2s;
-      transform-origin: 20px 5px;
-      color: #8B5CF6;
-    }
-  </style>
-  
-  <g class="gc-ghost-body">
-    <!-- Cute Ghost Body with scalloped bottom -->
-    <path 
-      d="M12 2C7.58172 2 4 5.58172 4 10V20.5C4 21.3284 5 21.8284 5.58579 21.2426L7.29289 19.5355C7.68342 19.145 8.31658 19.145 8.70711 19.5355L11.2929 22.1213C11.6834 22.5118 12.3166 22.5118 12.7071 22.1213L15.2929 19.5355C15.6834 19.145 16.3166 19.145 16.7071 19.5355L18.4142 21.2426C19 21.8284 20 21.3284 20 20.5V10C20 5.58172 16.4183 2 12 2Z" 
-      fill="currentColor" 
-      fill-opacity="0.1" 
-      stroke="currentColor" 
-      stroke-width="2" 
-      stroke-linejoin="round" 
-    />
-    <!-- Happy Eyes -->
-    <path d="M7.5 10Q8.5 8.5 9.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-    <path d="M14.5 10Q15.5 8.5 16.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-    
-    <!-- Cute little mouth -->
-    <path d="M11 13Q12 14.5 13 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-  </g>
-
-  <!-- Sparkles -->
-  <circle cx="2" cy="7" r="1" fill="currentColor" class="gc-sparkle-1" />
-  <circle cx="22" cy="15" r="1" fill="currentColor" class="gc-sparkle-2" />
-  <circle cx="20" cy="5" r="1.5" fill="currentColor" class="gc-sparkle-3" />
-</svg>
+        <svg width="72" height="72" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <clipPath id="vant-splash-clip">
+              <polygon points="36,36 476,36 256,476" />
+            </clipPath>
+            <linearGradient id="vant-splash-pl" x1="256" y1="296" x2="340" y2="140" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#0E043B" />
+              <stop offset="32%" stop-color="#3B0F96" />
+              <stop offset="56%" stop-color="#9A5CFF" />
+              <stop offset="82%" stop-color="#5B21B6" />
+              <stop offset="100%" stop-color="#43188E" />
+            </linearGradient>
+            <linearGradient id="vant-splash-pr" x1="476" y1="36" x2="310" y2="380" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#09022E" />
+              <stop offset="38%" stop-color="#4C1D95" />
+              <stop offset="72%" stop-color="#6D28D9" />
+              <stop offset="100%" stop-color="#3B0F8C" />
+            </linearGradient>
+            <linearGradient id="vant-splash-gb" x1="124" y1="36" x2="256" y2="210" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#E2E4E8" />
+              <stop offset="100%" stop-color="#D4D7DD" />
+            </linearGradient>
+            <linearGradient id="vant-splash-gt" x1="256" y1="296" x2="308" y2="420" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#E6E8EC" />
+              <stop offset="100%" stop-color="#F4F5F7" />
+            </linearGradient>
+          </defs>
+          <g clip-path="url(#vant-splash-clip)">
+            <polygon points="36,36 476,36 256,476" fill="#FFFFFF" />
+            <polygon points="124,36 256,36 256,280 182,138" fill="url(#vant-splash-gb)" />
+            <polygon points="256,296 330,144 330,360 308,372" fill="url(#vant-splash-pl)" />
+            <polygon points="330,144 476,36 308,372 330,360" fill="url(#vant-splash-pr)" />
+            <line x1="330" y1="144" x2="476" y2="36" stroke="#14064A" stroke-width="1.5" opacity="0.65" />
+            <path d="M 182,110 A 74,74 0 0,1 330,110 L 330,164 L 256,292 L 182,152 Z" fill="#050507" />
+            <path d="M 216,124 A 15,18 0 0,1 246,124 Z" fill="#E6E8EC" />
+            <path d="M 266,124 A 15,18 0 0,1 296,124 Z" fill="#E6E8EC" />
+            <polygon points="36,36 124,36 308,372 256,476" fill="#FFFFFF" />
+            <polygon points="256,274 308,372 256,476" fill="url(#vant-splash-gt)" />
+            <line x1="256" y1="274" x2="256" y2="476" stroke="#D1D5DB" stroke-width="1" opacity="0.7" />
+          </g>
+          <polygon points="36,36 476,36 256,476" stroke="#CBD5E1" stroke-width="1" stroke-linejoin="round" />
+        </svg>
       </div>
       <div>
-        <div class="splash-title">GhostCompute</div>
+        <div class="splash-title">Vant</div>
         <div class="splash-subtitle">Connecting Zero-Trust Node</div>
       </div>
       <div class="splash-loader-bar">
@@ -1393,65 +1591,52 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         <!-- Top Section: Header & Live Indicators -->
         <div class="hero-header">
           <div class="brand-identity">
-            <div class="ghost-avatar" id="avatar-cube" title="GhostCompute Engine">
-              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    @keyframes gc-float {
-      0%, 100% { transform: translateY(0px); }
-      50% { transform: translateY(-1.5px); }
-    }
-    @keyframes gc-sparkle {
-      0%, 100% { opacity: 0.4; transform: scale(0.8) translate(0, 0); }
-      50% { opacity: 0.9; transform: scale(1.2) translate(0, -1px); }
-    }
-    .gc-ghost-body {
-      animation: gc-float 4s ease-in-out infinite;
-      transform-origin: center;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-1 {
-      animation: gc-sparkle 3s ease-in-out infinite;
-      transform-origin: 2px 7px;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-2 {
-      animation: gc-sparkle 3s ease-in-out infinite 1s;
-      transform-origin: 22px 15px;
-      color: #8B5CF6;
-    }
-    .gc-sparkle-3 {
-      animation: gc-sparkle 3s ease-in-out infinite 2s;
-      transform-origin: 20px 5px;
-      color: #8B5CF6;
-    }
-  </style>
-  
-  <g class="gc-ghost-body">
-    <!-- Cute Ghost Body with scalloped bottom -->
-    <path 
-      d="M12 2C7.58172 2 4 5.58172 4 10V20.5C4 21.3284 5 21.8284 5.58579 21.2426L7.29289 19.5355C7.68342 19.145 8.31658 19.145 8.70711 19.5355L11.2929 22.1213C11.6834 22.5118 12.3166 22.5118 12.7071 22.1213L15.2929 19.5355C15.6834 19.145 16.3166 19.145 16.7071 19.5355L18.4142 21.2426C19 21.8284 20 21.3284 20 20.5V10C20 5.58172 16.4183 2 12 2Z" 
-      fill="currentColor" 
-      fill-opacity="0.1" 
-      stroke="currentColor" 
-      stroke-width="2" 
-      stroke-linejoin="round" 
-    />
-    <!-- Happy Eyes -->
-    <path d="M7.5 10Q8.5 8.5 9.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-    <path d="M14.5 10Q15.5 8.5 16.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-    
-    <!-- Cute little mouth -->
-    <path d="M11 13Q12 14.5 13 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-  </g>
-
-  <!-- Sparkles -->
-  <circle cx="2" cy="7" r="1" fill="currentColor" class="gc-sparkle-1" />
-  <circle cx="22" cy="15" r="1" fill="currentColor" class="gc-sparkle-2" />
-  <circle cx="20" cy="5" r="1.5" fill="currentColor" class="gc-sparkle-3" />
-</svg>
+            <div class="ghost-avatar" id="avatar-cube" title="Vant Engine">
+              <svg width="34" height="34" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <clipPath id="vant-avatar-clip">
+                    <polygon points="36,36 476,36 256,476" />
+                  </clipPath>
+                  <linearGradient id="vant-avatar-pl" x1="256" y1="296" x2="340" y2="140" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#0E043B" />
+                    <stop offset="32%" stop-color="#3B0F96" />
+                    <stop offset="56%" stop-color="#9A5CFF" />
+                    <stop offset="82%" stop-color="#5B21B6" />
+                    <stop offset="100%" stop-color="#43188E" />
+                  </linearGradient>
+                  <linearGradient id="vant-avatar-pr" x1="476" y1="36" x2="310" y2="380" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#09022E" />
+                    <stop offset="38%" stop-color="#4C1D95" />
+                    <stop offset="72%" stop-color="#6D28D9" />
+                    <stop offset="100%" stop-color="#3B0F8C" />
+                  </linearGradient>
+                  <linearGradient id="vant-avatar-gb" x1="124" y1="36" x2="256" y2="210" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#E2E4E8" />
+                    <stop offset="100%" stop-color="#D4D7DD" />
+                  </linearGradient>
+                  <linearGradient id="vant-avatar-gt" x1="256" y1="296" x2="308" y2="420" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#E6E8EC" />
+                    <stop offset="100%" stop-color="#F4F5F7" />
+                  </linearGradient>
+                </defs>
+                <g clip-path="url(#vant-avatar-clip)">
+                  <polygon points="36,36 476,36 256,476" fill="#FFFFFF" />
+                  <polygon points="124,36 256,36 256,280 182,138" fill="url(#vant-avatar-gb)" />
+                  <polygon points="256,296 330,144 330,360 308,372" fill="url(#vant-avatar-pl)" />
+                  <polygon points="330,144 476,36 308,372 330,360" fill="url(#vant-avatar-pr)" />
+                  <line x1="330" y1="144" x2="476" y2="36" stroke="#14064A" stroke-width="1.5" opacity="0.65" />
+                  <path d="M 182,110 A 74,74 0 0,1 330,110 L 330,164 L 256,292 L 182,152 Z" fill="#050507" />
+                  <path d="M 216,124 A 15,18 0 0,1 246,124 Z" fill="#E6E8EC" />
+                  <path d="M 266,124 A 15,18 0 0,1 296,124 Z" fill="#E6E8EC" />
+                  <polygon points="36,36 124,36 308,372 256,476" fill="#FFFFFF" />
+                  <polygon points="256,274 308,372 256,476" fill="url(#vant-avatar-gt)" />
+                  <line x1="256" y1="274" x2="256" y2="476" stroke="#D1D5DB" stroke-width="1" opacity="0.7" />
+                </g>
+                <polygon points="36,36 476,36 256,476" stroke="#CBD5E1" stroke-width="1" stroke-linejoin="round" />
+              </svg>
             </div>
             <div class="title-meta">
-              <h1>GhostCompute Node</h1>
+              <h1>Vant Node</h1>
               <p>Private Zero-Trust AI Cloud Gateway</p>
             </div>
           </div>
@@ -1468,21 +1653,54 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
 
         <!-- Connection Telemetry & Endpoints (Top Priority) -->
         <div class="telemetry-card">
-          <div class="telemetry-item">
+          <div class="telemetry-row">
             <span class="telemetry-label">Cloudflare Endpoint</span>
-            <span class="telemetry-value" id="tunnel-display">Detecting...</span>
+            <div class="telemetry-val-group">
+              <span class="telemetry-value" id="tunnel-display">Detecting...</span>
+              <button type="button" class="copy-mini-btn" id="copy-endpoint-btn" title="Copy endpoint">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span id="copy-endpoint-text">Copy</span>
+              </button>
+            </div>
           </div>
-          <div class="telemetry-item" id="token-row" style="display: none;">
+          <div class="telemetry-row" id="token-row" style="display: none;">
             <span class="telemetry-label">Pairing Token</span>
-            <span class="telemetry-value" id="token-display"></span>
+            <div class="telemetry-val-group">
+              <span class="telemetry-value" id="token-display"></span>
+              <button type="button" class="copy-mini-btn" id="copy-token-btn" title="Copy token">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span id="copy-token-text">Copy</span>
+              </button>
+            </div>
           </div>
-          <div class="telemetry-item">
+          <div class="telemetry-row">
             <span class="telemetry-label">Security Protocol</span>
             <span class="telemetry-value" style="color: #34d399;">Noise-XX Handshake + ChaCha20-Poly1305</span>
           </div>
         </div>
 
-        <!-- Primary Action Cluster (Top Priority for Quick Launch & Copy) -->
+        <!-- Modern Developer CLI Box -->
+        <div class="cli-box" id="cli-box">
+          <div class="cli-content">
+            <span class="cli-prefix">$</span>
+            <span class="cli-command" id="cli-command">vant connect &lt;endpoint&gt;</span>
+          </div>
+          <button type="button" class="cli-copy-btn" id="cli-copy-btn" title="Copy CLI Command">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span id="cli-copy-text">Copy CLI</span>
+          </button>
+        </div>
+
+        <!-- Primary Action Cluster -->
         <div class="actions-cluster">
           <a href="#" id="launch-app-btn" class="action-btn btn-primary">
             <div class="btn-label-group">
@@ -1492,8 +1710,8 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
                 <line x1="12" y1="17" x2="12" y2="21"></line>
               </svg>
               <div>
-                <span id="launch-app-text">Pair with GhostCompute Client</span>
-                <span class="btn-sub-note">Direct App Protocol (ghostcompute://)</span>
+                <span id="launch-app-text">Pair with Vant Client</span>
+                <span class="btn-sub-note">Native App Protocol (vant://)</span>
               </div>
             </div>
             <div class="btn-bubble">
@@ -1513,7 +1731,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
               </svg>
               <div>
                 <span id="launch-localhost-text">Connect via Localhost App</span>
-                <span class="btn-sub-note">Reliable Fallback (http://localhost:1420)</span>
+                <span class="btn-sub-note">Reliable Local Web Fallback (http://localhost:1420)</span>
               </div>
             </div>
             <div class="btn-bubble">
@@ -1543,56 +1761,56 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
           </button>
         </div>
 
-        <!-- Bottom Section: Tool Showcase, App Highlights & Ecosystem Promo -->
-        <div class="promo-section-header">
-          <span>About GhostCompute &amp; Platform Capabilities</span>
-          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent-light);">FEATURES</span>
+        <!-- Apple-Style 4-Card Bento Grid -->
+        <div class="bento-section-header">
+          <span>Platform Capabilities &amp; Architecture</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent-light);">BENTO ARCHITECTURE</span>
         </div>
 
-        <div id="promo-section" class="promo-grid">
-          <div class="feature-card">
-            <div class="promo-card-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-light);">
+        <div id="promo-section" class="bento-grid">
+          <div class="bento-card">
+            <div class="bento-icon-bubble">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
                 <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
                 <line x1="6" y1="6" x2="6.01" y2="6"></line>
                 <line x1="6" y1="18" x2="6.01" y2="18"></line>
               </svg>
-              <span>Remote GPU Power</span>
             </div>
-            <p class="promo-card-desc">Offload LLM inference and generative workflows to your dedicated home or office machine effortlessly.</p>
+            <div class="bento-title">Remote GPU Compute</div>
+            <p class="bento-desc">Offload LLM inference and vision workflows to your RTX, Apple Silicon, or AMD GPUs with zero local overhead.</p>
           </div>
 
-          <div class="feature-card">
-            <div class="promo-card-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-light);">
+          <div class="bento-card">
+            <div class="bento-icon-bubble">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
               </svg>
-              <span>Universal AI Bridge</span>
             </div>
-            <p class="promo-card-desc">Seamless integration with Ollama, ComfyUI, Open WebUI, LM Studio, n8n, Tabby, and 10+ open-source tools.</p>
+            <div class="bento-title">Universal AI Bridge</div>
+            <p class="bento-desc">Direct native bridge for Ollama, ComfyUI, Open WebUI, LM Studio, n8n, Tabby, Dify, and 10+ AI tools.</p>
           </div>
 
-          <div class="feature-card">
-            <div class="promo-card-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-light);">
+          <div class="bento-card">
+            <div class="bento-icon-bubble">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
               </svg>
-              <span>Noise-XX Zero-Trust</span>
             </div>
-            <p class="promo-card-desc">True peer-to-peer authenticated cryptography. No intermediate cloud servers can inspect or decrypt your data.</p>
+            <div class="bento-title">Noise-XX Zero-Trust</div>
+            <p class="bento-desc">End-to-end mutual authenticated cryptography. No intermediate cloud servers can inspect or decrypt tensors.</p>
           </div>
 
-          <div class="feature-card">
-            <div class="promo-card-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-light);">
+          <div class="bento-card">
+            <div class="bento-icon-bubble">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"></circle>
                 <line x1="2" y1="12" x2="22" y2="12"></line>
                 <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
               </svg>
-              <span>Zero-Config Tunneling</span>
             </div>
-            <p class="promo-card-desc">Instant Cloudflare Quick Tunnels traverse NATs and firewalls without requiring static IPs or port forwarding.</p>
+            <div class="bento-title">Zero-Config Tunnel</div>
+            <p class="bento-desc">Ephemeral Cloudflare Quick Tunnels traverse NATs and corporate firewalls without public IPs or port forwarding.</p>
           </div>
         </div>
 
@@ -1602,31 +1820,36 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
             <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent-light);">16 RECIPES</span>
           </div>
           <div class="tools-tags-container">
-            <span class="tool-tag">Ollama</span>
-            <span class="tool-tag">LM Studio</span>
-            <span class="tool-tag">Open WebUI</span>
-            <span class="tool-tag">ComfyUI</span>
-            <span class="tool-tag">n8n</span>
-            <span class="tool-tag">AnythingLLM</span>
-            <span class="tool-tag">Tabby</span>
-            <span class="tool-tag">Dify</span>
-            <span class="tool-tag">Whisper ASR</span>
-            <span class="tool-tag">Jan.ai</span>
-            <span class="tool-tag">Flowise</span>
-            <span class="tool-tag">Langflow</span>
-            <span class="tool-tag">Qdrant</span>
+            <span class="tool-chip">Ollama</span>
+            <span class="tool-chip">LM Studio</span>
+            <span class="tool-chip">Open WebUI</span>
+            <span class="tool-chip">ComfyUI</span>
+            <span class="tool-chip">n8n</span>
+            <span class="tool-chip">AnythingLLM</span>
+            <span class="tool-chip">Tabby</span>
+            <span class="tool-chip">Dify</span>
+            <span class="tool-chip">Whisper ASR</span>
+            <span class="tool-chip">Jan.ai</span>
+            <span class="tool-chip">Flowise</span>
+            <span class="tool-chip">Langflow</span>
+            <span class="tool-chip">Qdrant</span>
+            <span class="tool-chip">Activepieces</span>
+            <span class="tool-chip">Open Interpreter</span>
+            <span class="tool-chip">Twinny</span>
           </div>
         </div>
 
         <a href="https://github.com/John-Varghese-EH/GhostCompute" target="_blank" rel="noopener noreferrer" id="get-app-btn" class="action-btn btn-secondary" style="margin-top: 10px;">
           <div class="btn-label-group">
-            <span>Get GhostCompute App (Free &amp; Open Source)</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+            </svg>
+            <span>Get Vant Desktop App (Free &amp; Open Source)</span>
           </div>
           <div class="btn-bubble">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
+              <line x1="7" y1="17" x2="17" y2="7"></line>
+              <polyline points="7 7 17 7 17 17"></polyline>
             </svg>
           </div>
         </a>
@@ -1641,7 +1864,7 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
             <span>&middot;</span>
             <a href="https://linkedin.com/in/John--Varghese" target="_blank" rel="noopener noreferrer">LinkedIn</a>
             <span>&middot;</span>
-            <span>GhostCompute v0.1.0</span>
+            <span>Vant v0.1.0</span>
           </div>
           <p class="security-signature">
             End-to-End Encrypted Tunnel &middot; Ephemeral Peer-to-Peer Pipeline &middot; No Cloud Telemetry
@@ -1659,9 +1882,9 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
           var splash = document.getElementById("splash-screen");
           if (splash) {
             splash.classList.add("dismissed");
-            setTimeout(function() { splash.remove(); }, 600);
+            setTimeout(function() { splash.remove(); }, 500);
           }
-        }, 600);
+        }, 500);
       });
 
       // Fallback timer if load event already fired
@@ -1669,11 +1892,11 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         var splash = document.getElementById("splash-screen");
         if (splash && !splash.classList.contains("dismissed")) {
           splash.classList.add("dismissed");
-          setTimeout(function() { splash.remove(); }, 600);
+          setTimeout(function() { splash.remove(); }, 500);
         }
-      }, 900);
+      }, 800);
 
-      // Single, Clean Interactive Mouse Spotlight Tracking
+      // Single Interactive Mouse Spotlight Tracking
       var root = document.documentElement;
       window.addEventListener("mousemove", function(e) {
         root.style.setProperty("--mouse-x", e.clientX + "px");
@@ -1692,6 +1915,15 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
       
       var tunnelDisplay = document.getElementById("tunnel-display");
       if (tunnelDisplay) tunnelDisplay.textContent = currentUrl;
+
+      var cliCommand = document.getElementById("cli-command");
+      if (cliCommand) {
+        if (token) {
+          cliCommand.textContent = "vant connect " + currentUrl + " --token " + token;
+        } else {
+          cliCommand.textContent = "vant connect " + currentUrl;
+        }
+      }
 
       var stateBanner = document.getElementById("state-banner");
       var launchAppBtn = document.getElementById("launch-app-btn");
@@ -1716,13 +1948,13 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
 
         if (stateBanner) {
           stateBanner.className = "state-banner state-banner-active";
-          stateBanner.textContent = "Pairing token verified. Launching GhostCompute desktop client...";
+          stateBanner.textContent = "Pairing token verified. Launching Vant desktop client...";
         }
 
-        var deepLink = "ghostcompute://pair?url=" + encodeURIComponent(currentUrl) + "&token=" + encodeURIComponent(token);
+        var deepLink = "vant://pair?url=" + encodeURIComponent(currentUrl) + "&token=" + encodeURIComponent(token);
         if (launchAppBtn) {
           launchAppBtn.href = deepLink;
-          if (launchAppText) launchAppText.textContent = "Launch in GhostCompute Client";
+          if (launchAppText) launchAppText.textContent = "Launch in Vant Client";
         }
 
         // Attempt protocol handler launch
@@ -1733,23 +1965,63 @@ async fn handle_browser_http_request(mut socket: tokio::net::TcpStream, addr: st
         // Fallback guidance if protocol handler fails or isn't supported on Linux
         setTimeout(function() {
           if (stateBanner) {
-            stateBanner.innerHTML = "If your desktop app did not open automatically, click <strong>Pair with GhostCompute Client</strong>, use the <strong>Connect via Localhost App</strong> button (recommended for Linux), or copy the endpoint below.";
+            stateBanner.innerHTML = "If your desktop app did not open automatically, click <strong>Pair with Vant Client</strong>, use the <strong>Connect via Localhost App</strong> button (recommended for Linux), or copy the endpoint below.";
           }
         }, 2200);
 
       } else {
-        // NO PAIRING TOKEN PROVIDED: No use redirecting - present tool promotion & clear explanation
+        // NO PAIRING TOKEN PROVIDED
         if (stateBanner) {
           stateBanner.className = "state-banner state-banner-info";
-          stateBanner.innerHTML = "<strong>Notice:</strong> No pairing token was provided in this URL. Automatic app pairing requires an authenticated token from your Host machine. Explore GhostCompute below or copy this endpoint into your client.";
+          stateBanner.innerHTML = "<strong>Notice:</strong> No pairing token was provided in this URL. Automatic app pairing requires an authenticated token from your Host machine. Explore Vant below or copy this endpoint into your client.";
         }
 
         if (launchAppBtn) {
-          launchAppBtn.href = "ghostcompute://pair?url=" + encodeURIComponent(currentUrl);
-          if (launchAppText) launchAppText.textContent = "Open in GhostCompute (Manual Token Entry)";
+          launchAppBtn.href = "vant://pair?url=" + encodeURIComponent(currentUrl);
+          if (launchAppText) launchAppText.textContent = "Open in Vant (Manual Token Entry)";
         }
       }
 
+      // Copy endpoint button
+      var copyEndpointBtn = document.getElementById("copy-endpoint-btn");
+      if (copyEndpointBtn) {
+        copyEndpointBtn.addEventListener("click", function() {
+          navigator.clipboard.writeText(currentUrl).then(function() {
+            var el = document.getElementById("copy-endpoint-text");
+            if (el) el.textContent = "Copied!";
+            setTimeout(function() { if (el) el.textContent = "Copy"; }, 2000);
+          });
+        });
+      }
+
+      // Copy token button
+      var copyTokenBtn = document.getElementById("copy-token-btn");
+      if (copyTokenBtn) {
+        copyTokenBtn.addEventListener("click", function() {
+          if (token) {
+            navigator.clipboard.writeText(token).then(function() {
+              var el = document.getElementById("copy-token-text");
+              if (el) el.textContent = "Copied!";
+              setTimeout(function() { if (el) el.textContent = "Copy"; }, 2000);
+            });
+          }
+        });
+      }
+
+      // Copy CLI button
+      var cliCopyBtn = document.getElementById("cli-copy-btn");
+      if (cliCopyBtn) {
+        cliCopyBtn.addEventListener("click", function() {
+          var cmd = token ? ("vant connect " + currentUrl + " --token " + token) : ("vant connect " + currentUrl);
+          navigator.clipboard.writeText(cmd).then(function() {
+            var el = document.getElementById("cli-copy-text");
+            if (el) el.textContent = "Copied!";
+            setTimeout(function() { if (el) el.textContent = "Copy CLI"; }, 2000);
+          });
+        });
+      }
+
+      // Copy full tunnel URL button
       var copyBtn = document.getElementById("copy-btn");
       if (copyBtn) {
         copyBtn.addEventListener("click", function() {

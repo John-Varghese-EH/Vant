@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This document outlines common issues and their solutions when using GhostCompute.
+This document outlines common issues and their solutions when using Vant.
 
 ## 1. Connection Errors (Client to Host)
 
@@ -15,7 +15,7 @@ This document outlines common issues and their solutions when using GhostCompute
 **Symptom**: IDEs like Cursor show "Connection Refused" when making queries.
 **Fixes**:
 - Verify the **API Proxy** is enabled in the Client Settings.
-- Ensure the API Proxy port (default `11434`) is not currently in use by another local application (like a local installation of Ollama on your Client laptop). If so, change the API Proxy Port in GhostCompute and update your IDE to match.
+- Ensure the API Proxy port (default `11434`) is not currently in use by another local application (like a local installation of Ollama on your Client laptop). If so, change the API Proxy Port in Vant and update your IDE to match.
 
 ## 3. "Model Not Found"
 

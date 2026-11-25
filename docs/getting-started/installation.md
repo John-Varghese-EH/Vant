@@ -1,10 +1,10 @@
 # Installation Guide
 
-GhostCompute is built using [Tauri](https://tauri.app/) and Rust, ensuring a lightweight footprint and blazing-fast performance on any major operating system.
+Vant is built using [Tauri](https://tauri.app/) and Rust, ensuring a lightweight footprint and blazing-fast performance on any major operating system.
 
 ## Prerequisites
 
-Before installing GhostCompute, ensure you have the following installed on your machine:
+Before installing Vant, ensure you have the following installed on your machine:
 - **Rust Toolchain**: [Install Rust](https://www.rust-lang.org/tools/install)
 - **Node.js**: (Version 18+ recommended) [Install Node](https://nodejs.org/en)
 - **Ollama** (Host Machine Only): [Install Ollama](https://ollama.com/)
@@ -15,8 +15,8 @@ Before installing GhostCompute, ensure you have the following installed on your 
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/your-username/GhostCompute.git
-   cd GhostCompute
+   git clone https://github.com/your-username/Vant.git
+   cd Vant
    ```
 
 2. **Install Frontend Dependencies**
@@ -37,4 +37,4 @@ Before installing GhostCompute, ensure you have the following installed on your 
    The compiled executable will be located in `src-tauri/target/release/`.
 
 ## Architecture Note
-GhostCompute acts as both a **Host** (the machine running the GPU/Ollama instance) and a **Client** (the laptop or secondary machine making the request). The exact same binary is used for both!
+Vant acts as both a **Host** (the machine running the GPU/Ollama instance) and a **Client** (the laptop or secondary machine making the request). The exact same binary is used for both!

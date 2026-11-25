@@ -1,7 +1,7 @@
 [package]
 name = "ghost-compute"
 version = "0.1.0"
-description = "GhostCompute 👻 - Turn any High-End PC into a Private AI & Automation Cloud Server"
+description = "Vant - Apple-grade P2P Distributed GPU & AI Compute Mesh"
 authors = ["John Varghese (J0X) <https://github.com/John-Varghese-EH>"]
 homepage = "https://github.com/John-Varghese-EH/GhostCompute"
 repository = "https://github.com/John-Varghese-EH/GhostCompute"
